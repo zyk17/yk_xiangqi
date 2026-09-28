@@ -60,3 +60,6 @@ MediaProjection / ImageReader
 ## 许可证
 
 项目代码与自有资源（包括 `piece_classifier.onnx`）采用 [GNU GPL v3.0](LICENSE)。Pikafish 与其 NNUE 权重按各自许可证处理；特别是 `pikafish.nnue` 的非商业限制不随 GPL 改变。
+
+## 交流
+qq群: 1094907554
