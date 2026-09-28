@@ -33,6 +33,18 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
     private var controls: View? = null
     private var syncSide = Side.RED
 
+    /** 录屏启动后先展示轻量入口；用户切到第三方棋盘后再主动开始框选。 */
+    fun showReady() {
+        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        val select = button("框选棋盘")
+        val stop = button("停止")
+        select.setOnClickListener { showSelection() }
+        stop.setOnClickListener { listener.onStop() }
+        row.addView(select)
+        row.addView(stop)
+        replaceControls(row)
+    }
+
     fun showSelection() {
         if (selection != null) return
         selection = SelectionView(context)
@@ -46,7 +58,6 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
     }
 
     fun showControls(aiEnabled: Boolean) {
-        if (controls != null) return
         val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         val ai = button(if (aiEnabled) "AI开" else "AI")
         val side = button("红先")
@@ -64,6 +75,11 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
         row.addView(side)
         row.addView(sync)
         row.addView(stop)
+        replaceControls(row)
+    }
+
+    private fun replaceControls(row: View) {
+        remove(controls)
         controls = row
         windows.addView(row, WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,

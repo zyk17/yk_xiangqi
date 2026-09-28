@@ -119,7 +119,7 @@ public final class LinkForegroundService extends Service {
 
             @Override
             public void onSelectionCancelled() {
-                stopSelf();
+                overlay.showReady();
             }
 
             @Override
@@ -145,7 +145,7 @@ public final class LinkForegroundService extends Service {
                 stopSelf();
             }
         });
-        overlay.showSelection();
+        overlay.showReady();
     }
 
     private void configure(BoardGeometry geometry) {

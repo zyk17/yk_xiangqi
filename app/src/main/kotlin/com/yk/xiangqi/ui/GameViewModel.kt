@@ -154,6 +154,33 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
         gameRuntime.setAi(if (red) Side.RED else Side.BLACK, enabled)
     }
 
+    /** 查询模式是两方 AI 都关闭时的明确入口。 */
+    fun query() {
+        gameRuntime.setAi(Side.RED, false)
+        gameRuntime.setAi(Side.BLACK, false)
+    }
+
+    fun engineConfig(): Settings.Engine = settings.activeEngine()
+
+    fun setEngineConfig(threads: String, hashMb: String, multiPv: String): String? {
+        val threadValue = threads.toIntOrNull()
+        val hashValue = hashMb.toIntOrNull()
+        val multiPvValue = multiPv.toIntOrNull()
+        if (threadValue == null || hashValue == null || multiPvValue == null ||
+            threadValue <= 0 || hashValue <= 0 || multiPvValue <= 0)
+            return "线程、Hash 和 MultiPV 都必须是正整数"
+        val prior = settings.activeEngine()
+        val value = Settings.Engine(prior.id, prior.name, prior.directory, threadValue, hashValue, multiPvValue, prior.options)
+        settings.saveEngine(value, true)
+        engine.configure(linkedMapOf(
+            "Threads" to threadValue.toString(),
+            "Hash" to hashValue.toString(),
+            "MultiPV" to multiPvValue.toString(),
+        ).apply { putAll(prior.options) })
+        state = snapshot("已保存引擎配置")
+        return null
+    }
+
     fun setGoParams(red: Boolean, kind: SearchConfig.Kind, text: String): String? {
         val value = text.trim().toLongOrNull()
             ?: return "请输入正整数"

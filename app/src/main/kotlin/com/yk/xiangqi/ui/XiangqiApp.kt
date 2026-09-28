@@ -5,12 +5,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
@@ -72,6 +76,7 @@ fun XiangqiApp(onStartLink: () -> Unit, viewModel: GameViewModel = viewModel()) 
                 .padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            TopControls(viewModel, state)
             Text(state.status)
             Board(
                 board = state.board,
@@ -87,10 +92,7 @@ fun XiangqiApp(onStartLink: () -> Unit, viewModel: GameViewModel = viewModel()) 
                 }
             }
             NavigationControls(viewModel, state.cursor, state.length)
-            ModeControls(viewModel, state)
-            SearchControls(viewModel)
-            EnginePanel(state)
-            BookPanel(state, viewModel::optimizeBook, viewModel::removeBook)
+            EnginePanel(state, viewModel::optimizeBook, viewModel::removeBook, Modifier.weight(1f))
             if (settingsVisible) {
                 SettingsDialog(
                     viewModel = viewModel,
@@ -114,27 +116,36 @@ private fun SettingsDialog(
     close: () -> Unit,
 ) {
     val config = viewModel.linkConfig()
+    val engine = viewModel.engineConfig()
     var settle by remember { mutableStateOf(config.settleMs.toString()) }
     var threshold by remember { mutableStateOf(config.motionThreshold.toString()) }
     var tap by remember { mutableStateOf(config.tapIntervalMs.toString()) }
+    var threads by remember { mutableStateOf(engine.threads.toString()) }
+    var hashMb by remember { mutableStateOf(engine.hashMb.toString()) }
+    var multiPv by remember { mutableStateOf(engine.multiPv.toString()) }
+    var editingRed by remember { mutableStateOf<Boolean?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = close,
         title = { Text("设置") },
         text = {
-            Column {
-                Text("棋盘", fontWeight = FontWeight.Bold)
-                Row {
-                    TextButton(viewModel::flip) { Text(if (state.flipped) "取消翻转" else "翻转棋盘") }
-                    TextButton(viewModel::arrows) { Text(if (state.bothArrows) "显示双箭头" else "只显示单箭头") }
+            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
+                Text("引擎", fontWeight = FontWeight.Bold)
+                Text("当前：${engine.name}")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton({ close(); pickEngine() }) { Text("导入 UCI 引擎") }
+                    TextButton({ close(); pickNetwork() }) { Text("导入 NNUE") }
                 }
-                Text("引擎与开局库", fontWeight = FontWeight.Bold)
+                OutlinedTextField(threads, { threads = it; error = null }, label = { Text("线程数") }, singleLine = true)
+                OutlinedTextField(hashMb, { hashMb = it; error = null }, label = { Text("Hash (MB)") }, singleLine = true)
+                OutlinedTextField(multiPv, { multiPv = it; error = null }, label = { Text("MultiPV") }, singleLine = true)
                 Row {
-                    TextButton({ close(); pickBook() }) { Text("选择 OBK") }
-                    TextButton({ close(); pickEngine() }) { Text("选择引擎") }
-                    TextButton({ close(); pickNetwork() }) { Text("选择 NNUE") }
+                    TextButton({ editingRed = true }) { Text("红方：${viewModel.goParamsLabel(true)}") }
+                    TextButton({ editingRed = false }) { Text("黑方：${viewModel.goParamsLabel(false)}") }
                 }
-                Text("连线", fontWeight = FontWeight.Bold)
+                Text("开局库", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+                TextButton({ close(); pickBook() }) { Text("选择 OBK 开局库") }
+                Text("连线高级参数", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
                 OutlinedTextField(settle, { settle = it; error = null }, label = { Text("静止时间 ms") }, singleLine = true)
                 OutlinedTextField(threshold, { threshold = it; error = null }, label = { Text("运动阈值 0–1") }, singleLine = true)
                 OutlinedTextField(tap, { tap = it; error = null }, label = { Text("双击间隔 ms") }, singleLine = true)
@@ -143,26 +154,29 @@ private fun SettingsDialog(
         },
         confirmButton = {
             TextButton({
-                error = viewModel.setLinkConfig(settle, threshold, tap); if (error == null) close()
+                error = viewModel.setEngineConfig(threads, hashMb, multiPv)
+                    ?: viewModel.setLinkConfig(settle, threshold, tap)
+                if (error == null) close()
             }) { Text("确定") }
         },
         dismissButton = { TextButton(close) { Text("取消") } },
     )
+    editingRed?.let { red -> LimitDialog(red, viewModel) { editingRed = null } }
 }
 
 @Composable
-private fun ModeControls(viewModel: GameViewModel, state: UiState) {
-    var editingRed by remember { mutableStateOf<Boolean?>(null) }
-    Row {
-        OutlinedButton({ viewModel.setAi(true, !state.redAi) }) { Text(if (state.redAi) "红 AI 开" else "红 AI 关") }
-        Spacer(Modifier.width(8.dp))
-        OutlinedButton({ viewModel.setAi(false, !state.blackAi) }) { Text(if (state.blackAi) "黑 AI 开" else "黑 AI 关") }
+private fun TopControls(viewModel: GameViewModel, state: UiState) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedButton({ viewModel.setAi(true, !state.redAi) }, Modifier.weight(1f)) { Text(if (state.redAi) "红 AI 开" else "红 AI") }
+        OutlinedButton({ viewModel.setAi(false, !state.blackAi) }, Modifier.weight(1f)) { Text(if (state.blackAi) "黑 AI 开" else "黑 AI") }
+        Button(viewModel::query, Modifier.weight(1f), enabled = state.mode != PlayMode.QUERY) { Text("查询") }
     }
-    Row {
-        TextButton({ editingRed = true }) { Text("红：${viewModel.goParamsLabel(true)}") }
-        TextButton({ editingRed = false }) { Text("黑：${viewModel.goParamsLabel(false)}") }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedButton(viewModel::flip, Modifier.weight(1f)) { Text(if (state.flipped) "正向" else "翻转") }
+        OutlinedButton(viewModel::arrows, Modifier.weight(1f)) { Text(if (state.bothArrows) "双箭头" else "单箭头") }
+        Button(viewModel::immediate, Modifier.weight(1f)) { Text("立即出招") }
+        OutlinedButton(viewModel::alternative, Modifier.weight(1f)) { Text("变招") }
     }
-    editingRed?.let { red -> LimitDialog(red, viewModel) { editingRed = null } }
 }
 
 @Composable
@@ -225,50 +239,31 @@ private fun defaultLimitValue(kind: SearchConfig.Kind): Long = when (kind) {
 @Composable
 private fun NavigationControls(viewModel: GameViewModel, cursor: Int, length: Int) {
     Row {
-        Button(viewModel::first) { Text("|<") }
-        Button(viewModel::previous) { Text("<") }
+        TextButton(viewModel::first) { Text("|<") }
+        TextButton(viewModel::previous) { Text("<") }
         Text(" $cursor/$length ")
-        Button(viewModel::next) { Text(">") }
-        Button(viewModel::last) { Text(">|") }
+        TextButton(viewModel::next) { Text(">") }
+        TextButton(viewModel::last) { Text(">|") }
     }
 }
 
 @Composable
-private fun SearchControls(viewModel: GameViewModel) {
-    Row {
-        Button(viewModel::immediate) { Text("立即出招") }
-        Spacer(Modifier.width(8.dp))
-        OutlinedButton(viewModel::alternative) { Text("变招") }
-    }
-}
-
-@Composable
-private fun EnginePanel(state: UiState) {
+private fun EnginePanel(state: UiState, optimize: () -> Unit, remove: () -> Unit, modifier: Modifier) {
     val engine = state.analysis
     Card(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(top = 8.dp)
     ) {
-        Column(Modifier.padding(10.dp)) {
-            Text("引擎", fontWeight = FontWeight.Bold)
-            Text("Q ${engine?.score ?: "—"}  深度 ${engine?.depth ?: "—"}  用时 ${engine?.timeMs ?: "—"}ms")
-            Text("NPS ${engine?.nps ?: "—"}  Nodes ${engine?.nodes ?: "—"}  WDL ${engine?.wdl?.let { "${it.win}/${it.draw}/${it.loss}" } ?: "—"}")
+        Column(Modifier.padding(10.dp).verticalScroll(rememberScrollState())) {
+            Text("引擎输出", fontWeight = FontWeight.Bold)
+            Text("Q ${engine?.score ?: "—"}    深度 ${engine?.depth ?: "—"}    用时 ${engine?.timeMs ?: "—"} ms")
+            Text("NPS ${engine?.nps ?: "—"}    节点 ${engine?.nodes ?: "—"}")
+            Text("WDL ${engine?.wdl?.let { "${it.win}/${it.draw}/${it.loss}" } ?: "—"}")
+            Text("主变", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
             Text(engine?.pv?.joinToString(" ") ?: "等待分析")
-        }
-    }
-}
-
-@Composable
-private fun BookPanel(state: UiState, optimize: () -> Unit, remove: () -> Unit) {
-    if (state.book.isEmpty() && state.bookName == null) return
-    Card(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp)
-    ) {
-        Column(Modifier.padding(10.dp)) {
-            Text("开局库", fontWeight = FontWeight.Bold)
+            if (state.book.isEmpty() && state.bookName == null) return@Column
+            Text("开局库", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
             Text(state.bookName ?: "未选择")
             if (state.bookNeedsOptimization) OutlinedButton(optimize) { Text("建立旁路索引") }
             if (state.bookName != null) TextButton(remove) { Text("移除开局库") }

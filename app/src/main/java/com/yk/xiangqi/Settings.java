@@ -69,7 +69,7 @@ public final class Settings {
 
     public List<Engine> engines() {
         List<Engine> out = new ArrayList<>();
-        out.add(new Engine(BUNDLED_ENGINE_ID, "Pikafish", null, 1, 64, 1, Collections.emptyMap()));
+        out.add(readEngine(BUNDLED_ENGINE_ID));
         for (String id : ids(ENGINE_IDS)) out.add(readEngine(id));
         return Collections.unmodifiableList(out);
     }
@@ -81,9 +81,8 @@ public final class Settings {
     }
 
     public void saveEngine(Engine value, boolean active) {
-        if (BUNDLED_ENGINE_ID.equals(value.id)) throw new IllegalArgumentException("内置引擎不可覆盖");
         Set<String> ids = ids(ENGINE_IDS);
-        ids.add(value.id);
+        if (!BUNDLED_ENGINE_ID.equals(value.id)) ids.add(value.id);
         String p = "engine." + value.id + ".";
         SharedPreferences.Editor e = preferences.edit().putStringSet(ENGINE_IDS, ids).putString(p + "name", value.name).putString(p + "directory", value.directory).putInt(p + "threads", value.threads).putInt(p + "hash", value.hashMb).putInt(p + "multiPv", value.multiPv).putStringSet(p + "optionNames", new LinkedHashSet<>(value.options.keySet()));
         for (Map.Entry<String, String> option : value.options.entrySet()) e.putString(p + "option." + option.getKey(), option.getValue());
@@ -128,7 +127,8 @@ public final class Settings {
             String value = preferences.getString(p + "option." + name, null);
             if (value != null) options.put(name, value);
         }
-        return new Engine(id, preferences.getString(p + "name", id), preferences.getString(p + "directory", null), preferences.getInt(p + "threads", 1), preferences.getInt(p + "hash", 64), preferences.getInt(p + "multiPv", 1), options);
+        String name = preferences.getString(p + "name", BUNDLED_ENGINE_ID.equals(id) ? "Pikafish" : id);
+        return new Engine(id, name, preferences.getString(p + "directory", null), preferences.getInt(p + "threads", 1), preferences.getInt(p + "hash", 64), preferences.getInt(p + "multiPv", 1), options);
     }
 
     private Book readBook(String id) {
