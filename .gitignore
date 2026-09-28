@@ -1,0 +1,17 @@
+# 本机 Android SDK 配置与 IDE 状态
+local.properties
+.idea/
+*.iml
+
+# Gradle、Kotlin 与 Android 的可再生构建产物
+.gradle/
+.kotlin/
+build/
+app/build/
+.cxx/
+.externalNativeBuild/
+gradle/gradle-daemon-jvm.properties
+
+# 本机调试截图、录屏与临时集成工具
+captures/
+LOCAL_TEST/
