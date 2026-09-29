@@ -80,6 +80,19 @@ public final class ObservedBoard {
         return difference;
     }
 
+    /** 只有恰好一个红帅和一个黑将的观测棋盘才能安全重建规则局面。 */
+    public boolean canBuildPosition() {
+        int redKing = 0;
+        int blackKing = 0;
+        for (byte label : cells) {
+            if (label == 1)
+                redKing++;
+            else if (label == 8)
+                blackKing++;
+        }
+        return redKing == 1 && blackKing == 1;
+    }
+
     /**
      * 将已按核心坐标排列的观测棋盘用于首次建盘或用户同步。
      */

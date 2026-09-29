@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 
 import com.yk.xiangqi.core.Board;
 import com.yk.xiangqi.core.Move;
+import com.yk.xiangqi.core.PieceType;
 import com.yk.xiangqi.core.Position;
 import com.yk.xiangqi.core.Side;
 import org.junit.Test;
@@ -41,6 +42,41 @@ public final class LinkCoreTest {
         LinkAction action = state().reduce(position, screenForRed(wrongKinds(ObservedBoard.from(position.play(move)))), 0L).action();
         assertEquals(LinkAction.Kind.PLAY, action.kind());
         assertEquals(move, action.move());
+    }
+
+    @Test
+    public void repairRequiresBothMoveEndpoints() {
+        Position position = Position.start();
+        LinkAction action = state().reduce(position,
+            screenForRed(withLabel(position, Board.square(0, 3), ObservedBoard.EMPTY)), 0L).action();
+        assertEquals(LinkAction.Kind.NONE, action.kind());
+    }
+
+    @Test
+    public void repairAllowsOneUnchangedSquareError() {
+        Position position = Position.start();
+        Move move = Move.parse("a3a4");
+        LinkAction action = state().reduce(position,
+            screenForRed(withLabel(position.play(move), Board.square(8, 9), ObservedBoard.EMPTY)), 0L).action();
+        assertEquals(LinkAction.Kind.PLAY, action.kind());
+        assertEquals(move, action.move());
+    }
+
+    @Test
+    public void standardStartRepairsDuplicateKingLabels() {
+        ObservedBoard malformed = wrongKinds(ObservedBoard.from(Position.start()));
+        LinkResult result = LinkState.start(Side.RED, Side.RED).synchronize(screenForRed(malformed), Side.RED);
+        assertEquals(LinkAction.Kind.RESET, result.action().kind());
+        assertEquals(Position.start().toFen(), result.action().position().toFen());
+    }
+
+    @Test
+    public void invalidNonStandardSyncFailsWithoutThrowing() {
+        Position position = Position.start().play(Move.parse("a3a4"));
+        LinkResult result = LinkState.start(Side.RED, Side.RED)
+            .synchronize(screenForRed(wrongKinds(ObservedBoard.from(position))), Side.BLACK);
+        assertEquals(LinkAction.Kind.DESYNCED, result.action().kind());
+        assertEquals(LinkState.Phase.DESYNCED, result.state().phase());
     }
 
     @Test
@@ -89,10 +125,11 @@ public final class LinkCoreTest {
     }
 
     @Test
-    public void largeStructuralChangeIsNewGameInsteadOfDesync() {
+    public void nonStandardLargeStructuralChangeDesyncsInsteadOfResetting() {
         Position current = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5")).play(Move.parse("c3c4"));
-        LinkAction action = state().reduce(current, screenForRed(ObservedBoard.from(Position.start())), 0L).action();
-        assertEquals(LinkAction.Kind.RESET, action.kind());
+        Position unrelated = Position.start().play(Move.parse("e3e4"));
+        LinkAction action = state().reduce(current, screenForRed(ObservedBoard.from(unrelated)), 0L).action();
+        assertEquals(LinkAction.Kind.DESYNCED, action.kind());
     }
 
     @Test
@@ -145,6 +182,27 @@ public final class LinkCoreTest {
     private static LinkState state() {
         ObservedBoard start = screenForRed(ObservedBoard.from(Position.start()));
         return LinkState.start(Side.RED, Side.RED).synchronize(start, Side.RED).state();
+    }
+
+    private static ObservedBoard withLabel(Position position, int changedSquare, byte changedLabel) {
+        float[] logits = new float[Board.SQUARES * ObservedBoard.LABELS];
+        position.forEachPiece((square, side, type) -> logits[square * ObservedBoard.LABELS + label(side, type)] = 10f);
+        for (int label = 0; label < ObservedBoard.LABELS; label++)
+            logits[changedSquare * ObservedBoard.LABELS + label] = label == changedLabel ? 10f : 0f;
+        return ObservedBoard.fromLogits(logits);
+    }
+
+    private static int label(Side side, PieceType type) {
+        int kind = switch (type) {
+            case KING -> 1;
+            case ADVISOR -> 2;
+            case BISHOP -> 3;
+            case KNIGHT -> 4;
+            case ROOK -> 5;
+            case CANNON -> 6;
+            case PAWN -> 7;
+        };
+        return side == Side.RED ? kind : kind + 7;
     }
 
     private static FloatBuffer floats() {

@@ -52,6 +52,8 @@ public final class LinkForegroundService extends Service {
     private BoardGeometry geometry;
     /** 由 worker 持有，延迟识别完成、替换或服务关闭时释放。 */
     private Image pendingFrame;
+    /** 只比较框选棋盘内的少量亮度样本，避免静态合成帧重复触发 ONNX。 */
+    private final FrameGate frameGate = new FrameGate();
 
     // 应用与悬浮窗。
     private GameRuntime gameRuntime;
@@ -63,10 +65,11 @@ public final class LinkForegroundService extends Service {
 
     // 连线过程状态。仅由 worker 写入。
     private Side pendingSyncSide;
-    /**
-     * 每次新帧都会重置；到期时只识别最后保存的一张帧。
-     */
+    /** 棋盘区域出现实质视觉变化时重置；到期时只识别最后保存的一张帧。 */
     private final Runnable settledFrame = this::processSettledFrame;
+    /** 当前候选棋盘变化的首尾时刻，仅在最终产生连线动作时输出分段耗时。 */
+    private long firstChangeMs = -1L;
+    private long lastChangeMs = -1L;
     private int writtenPly = -1;
     private volatile boolean stopping;
 
@@ -290,6 +293,9 @@ public final class LinkForegroundService extends Service {
         discardPendingFrame();
         this.geometry = geometry;
         linkState = LinkState.start(bottomSide, newGameSide);
+        frameGate.reset();
+        firstChangeMs = -1L;
+        lastChangeMs = -1L;
         recognizer.reset();
     }
 
@@ -347,7 +353,8 @@ public final class LinkForegroundService extends Service {
     }
 
     /**
-     * 接管 ImageReader 中的最新帧，并延迟到没有后续帧时再推理。
+     * 接管 ImageReader 的最新帧。只有棋盘区域的轻量指纹发生实质变化，才保存该帧并
+     * 重置稳定等待；静态合成帧直接释放，不进入预处理或 ONNX。
      *
      * @return 是否实际消费了一张投屏帧。
      */
@@ -359,6 +366,24 @@ public final class LinkForegroundService extends Service {
             image = source.acquireLatestImage();
             if (image == null)
                 return false;
+            // 失步后仅接受用户明确请求的同步帧，避免继续预处理和推理。
+            if (pendingSyncSide == null && linkState.phase() == LinkState.Phase.DESYNCED) {
+                image.close();
+                return true;
+            }
+            if (pendingSyncSide == null) {
+                if (!frameGate.changed(image, geometry)) {
+                    image.close();
+                    return true;
+                }
+                long now = SystemClock.elapsedRealtime();
+                if (pendingFrame == null)
+                    firstChangeMs = now;
+                lastChangeMs = now;
+                frameGate.accept();
+            } else {
+                frameGate.accept(image, geometry);
+            }
             replacePendingFrame(image);
             image = null;
             worker.removeCallbacks(settledFrame);
@@ -377,9 +402,7 @@ public final class LinkForegroundService extends Service {
         }
     }
 
-    /**
-     * frameSettleMs 内没有更晚的帧时，处理暂存的最终帧。
-     */
+    /** frameSettleMs 内没有更晚的实质棋盘变化时，处理暂存的最终帧。 */
     private void processSettledFrame() {
         if (recognizer == null || stopping)
             return;
@@ -387,7 +410,8 @@ public final class LinkForegroundService extends Service {
         if (image == null)
             return;
         try {
-            reduceLink(recognizer.recognize(image, geometry));
+            long inferenceStartedMs = SystemClock.elapsedRealtime();
+            reduceLink(recognizer.recognize(image, geometry), inferenceStartedMs);
         } catch (Exception error) {
             failRecognition(error);
         } finally {
@@ -395,9 +419,16 @@ public final class LinkForegroundService extends Service {
         }
     }
 
-    private void reduceLink(ObservedBoard board) {
+    private void reduceLink(ObservedBoard board, long inferenceStartedMs) {
         LinkResult result = linkState.reduce(gameRuntime.state().position(), board, SystemClock.elapsedRealtime());
         linkState = result.state();
+        long now = SystemClock.elapsedRealtime();
+        if (result.action().kind() != LinkAction.Kind.NONE && firstChangeMs >= 0L)
+            Log.i(TAG, "识别链路：首差异→末差异=" + (lastChangeMs - firstChangeMs)
+                + "ms，末差异→推理=" + (inferenceStartedMs - lastChangeMs)
+                + "ms，推理与归约=" + (now - inferenceStartedMs) + "ms，动作=" + result.action().kind());
+        firstChangeMs = -1L;
+        lastChangeMs = -1L;
         apply(result.action());
     }
 
@@ -455,6 +486,73 @@ public final class LinkForegroundService extends Service {
         final int[] count = {0};
         position.forEachPiece((square, side, type) -> count[0]++);
         return count[0];
+    }
+
+    /**
+     * ImageReader 只能提供最新合成帧，不能判断棋盘是否真的改变。这里以每个交叉点
+     * 周围的五个亮度样本做固定阈值比较；它远轻于预处理和 ONNX，只负责决定是否重置
+     * 稳定等待，不负责识别棋子。
+     */
+    private static final class FrameGate {
+        private static final float[] OFFSETS = {0f, 0f, -.18f, 0f, .18f, 0f, 0f, -.18f, 0f, .18f};
+        private static final int SAMPLE_COUNT = BoardGeometry.FILES * BoardGeometry.RANKS * (OFFSETS.length / 2);
+        private static final int LUMA_DELTA = 20;
+        private static final int CHANGED_SAMPLES = 3;
+        private final byte[] previous = new byte[SAMPLE_COUNT];
+        private final byte[] sampled = new byte[SAMPLE_COUNT];
+        private boolean initialized;
+
+        void reset() {
+            initialized = false;
+        }
+
+        boolean changed(Image image, BoardGeometry geometry) {
+            sample(image, geometry);
+            if (!initialized)
+                return true;
+            int changed = 0;
+            for (int index = 0; index < SAMPLE_COUNT; index++) {
+                int difference = Math.abs(Byte.toUnsignedInt(sampled[index]) - Byte.toUnsignedInt(previous[index]));
+                if (difference >= LUMA_DELTA && ++changed >= CHANGED_SAMPLES)
+                    return true;
+            }
+            return false;
+        }
+
+        void accept() {
+            System.arraycopy(sampled, 0, previous, 0, SAMPLE_COUNT);
+            initialized = true;
+        }
+
+        void accept(Image image, BoardGeometry geometry) {
+            sample(image, geometry);
+            accept();
+        }
+
+        private void sample(Image image, BoardGeometry geometry) {
+            Image.Plane plane = image.getPlanes()[0];
+            java.nio.ByteBuffer pixels = plane.getBuffer();
+            int width = image.getWidth();
+            int height = image.getHeight();
+            int rowStride = plane.getRowStride();
+            int pixelStride = plane.getPixelStride();
+            int index = 0;
+            for (int row = 0; row < BoardGeometry.RANKS; row++)
+                for (int column = 0; column < BoardGeometry.FILES; column++)
+                    for (int offset = 0; offset < OFFSETS.length; offset += 2) {
+                        int x = clamp(Math.round(geometry.left() + (column + OFFSETS[offset]) * geometry.stepX()), 0, width - 1);
+                        int y = clamp(Math.round(geometry.top() + (row + OFFSETS[offset + 1]) * geometry.stepY()), 0, height - 1);
+                        int at = y * rowStride + x * pixelStride;
+                        int red = pixels.get(at) & 255;
+                        int green = pixels.get(at + 1) & 255;
+                        int blue = pixels.get(at + 2) & 255;
+                        sampled[index++] = (byte) ((red * 77 + green * 150 + blue * 29) >>> 8);
+                    }
+        }
+
+        private static int clamp(int value, int lower, int upper) {
+            return Math.max(lower, Math.min(upper, value));
+        }
     }
 
     @Override

@@ -15,7 +15,6 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
     public enum Phase {INITIAL, NORMAL, WAITING_WRITEBACK, DESYNCED}
 
     private static final int REPAIR_DIFFERENCE = 1;
-    private static final int NEW_GAME_DIFFERENCE = 4;
     private static final long WRITEBACK_WAIT_MS = 3_000L;
     private static final ObservedBoard STANDARD_START = ObservedBoard.from(Position.start());
 
@@ -54,10 +53,10 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
         if (phase == Phase.INITIAL)
             return reset(screenBoard, newGameSide);
 
+        ObservedBoard observed = screenBoard.orientForBottom(bottomSide);
+        ObservedBoard currentBoard = ObservedBoard.from(current);
+        int difference = observed.structureDifference(currentBoard);
         if (phase == Phase.WAITING_WRITEBACK) {
-            ObservedBoard observed = screenBoard.orientForBottom(bottomSide);
-            ObservedBoard currentBoard = ObservedBoard.from(current);
-            int difference = observed.structureDifference(currentBoard);
             if (difference == 0)
                 return normal(LinkAction.NONE);
             Move response = findMove(current, currentBoard, observed, difference, 0);
@@ -67,20 +66,13 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
                 return result(LinkAction.NONE);
         }
 
-        Side standardStartBottom = standardStartBottom(screenBoard);
-        if (standardStartBottom != null)
-            return reset(screenBoard, newGameSide);
-
-        ObservedBoard observed = screenBoard.orientForBottom(bottomSide);
-        ObservedBoard currentBoard = ObservedBoard.from(current);
-        int difference = observed.structureDifference(currentBoard);
         if (difference == 0)
             return normal(LinkAction.NONE);
 
         Move move = findMove(current, currentBoard, observed, difference, 0);
         if (move != null)
             return normal(LinkAction.play(move));
-        if (difference > NEW_GAME_DIFFERENCE)
+        if (standardStartBottom(screenBoard) != null)
             return reset(screenBoard, newGameSide);
 
         move = findMove(current, currentBoard, observed, difference, REPAIR_DIFFERENCE);
@@ -100,9 +92,22 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
     }
 
     private LinkResult reset(ObservedBoard screenBoard, Side sideToMove) {
-        Side bottom = detectBottomSide(screenBoard);
+        Side standardBottom = standardStartBottom(screenBoard);
+        if (standardBottom != null)
+            return reset(standardBottom, STANDARD_START.toPosition(sideToMove));
+        if (!screenBoard.canBuildPosition())
+            return failed();
+        Side bottom = inferBottomSide(screenBoard);
+        return reset(bottom, screenBoard.orientForBottom(bottom).toPosition(sideToMove));
+    }
+
+    private LinkResult reset(Side bottom, Position position) {
         LinkState next = new LinkState(bottom, newGameSide, Phase.NORMAL, 0L);
-        return new LinkResult(next, LinkAction.reset(screenBoard.orientForBottom(bottom).toPosition(sideToMove)));
+        return new LinkResult(next, LinkAction.reset(position));
+    }
+
+    private LinkResult failed() {
+        return new LinkResult(stopRecognition(), LinkAction.DESYNCED);
     }
 
     private LinkResult normal(LinkAction action) {
@@ -113,21 +118,17 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
         return new LinkResult(this, action);
     }
 
-    private static Side detectBottomSide(ObservedBoard screenBoard) {
-        Side standard = standardStartBottom(screenBoard);
-        return standard != null ? standard : inferBottomSide(screenBoard);
-    }
-
     private static Move findMove(Position current, ObservedBoard currentBoard, ObservedBoard observed,
                                  int currentDifference, int allowedDifference) {
         Move result = null;
         int movingSide = current.sideToMove() == Side.RED ? 1 : 2;
         for (Move move : current.legalMoves()) {
+            // 起终点定义这一步；补救只能忽略其余不动格的一处结构误差。
+            if (observed.structureAt(move.from) != 0 || observed.structureAt(move.to) != movingSide)
+                continue;
             int difference = currentDifference;
             difference -= mismatch(observed.structureAt(move.from), currentBoard.structureAt(move.from));
             difference -= mismatch(observed.structureAt(move.to), currentBoard.structureAt(move.to));
-            difference += mismatch(observed.structureAt(move.from), 0);
-            difference += mismatch(observed.structureAt(move.to), movingSide);
             if (difference > allowedDifference)
                 continue;
             if (result != null)

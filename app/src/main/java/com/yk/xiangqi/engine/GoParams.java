@@ -3,7 +3,7 @@ package com.yk.xiangqi.engine;
 import java.util.ArrayList;
 import java.util.List;
 
-/** UCI {@code go} 参数。字段为空或 false 时不写入命令。 */
+/** UCI {@code go} 参数。数值字段为 {@code null}、布尔字段为 {@code false} 时不写入命令。 */
 public final class GoParams {
     public Long wtime;
     public Long btime;
