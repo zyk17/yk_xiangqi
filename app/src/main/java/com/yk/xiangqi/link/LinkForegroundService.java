@@ -116,13 +116,10 @@ public final class LinkForegroundService extends Service {
             }
         }, worker);
         DisplayMetrics metrics = captureMetrics();
-        DisplayMetrics windowMetrics = getResources().getDisplayMetrics();
-        Log.i(TAG, "投屏真实尺寸=" + metrics.widthPixels + 'x' + metrics.heightPixels
-                + "，应用窗口=" + windowMetrics.widthPixels + 'x' + windowMetrics.heightPixels);
         createCapture(metrics);
         gameRuntime = ((XiangqiApplication) getApplication()).gameRuntime();
         try {
-            recognizer = new PieceRecognizer(this);
+            recognizer = new PieceRecognizer(this, settings.link().modelThreads);
         } catch (Exception error) {
             stopSelf();
             return;
@@ -202,7 +199,7 @@ public final class LinkForegroundService extends Service {
         postToWorker(() -> {
             worker.removeCallbacks(settledFrame);
             startRecognition(geometry, bottom);
-            Log.i(TAG, "开始连线：棋盘=" + geometry.left() + ',' + geometry.top() + '-' + geometry.right() + ',' + geometry.bottom() + "，底边=" + bottom);
+            Log.i(TAG, "开始连线，底边=" + bottom);
             writtenPly = gameRuntime.state().moves().size();
             getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification("连线已开始"));
             queueLatestFrame(reader);
@@ -323,7 +320,9 @@ public final class LinkForegroundService extends Service {
             return;
         writtenPly = moves.size();
         com.yk.xiangqi.core.Move move = moves.get(moves.size() - 1);
-        GesturePlan plan = GesturePlan.forMove(geometry, linkState.bottomSide(), move, settings.link().tapIntervalMs);
+        Settings.Link config = settings.link();
+        GesturePlan plan = GesturePlan.forMove(geometry, linkState.bottomSide(), move,
+                config.tapDurationMs, config.tapIntervalMs);
         linkState = linkState.awaitWriteback(SystemClock.elapsedRealtime());
         boolean dispatched = LinkAccessibilityService.dispatch(plan, new LinkAccessibilityService.GestureResult() {
             @Override

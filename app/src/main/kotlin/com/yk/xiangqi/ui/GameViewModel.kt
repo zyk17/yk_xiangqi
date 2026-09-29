@@ -610,8 +610,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
 
     fun linkConfig(): Settings.Link = settings.link()
 
-    fun setLinkConfig(frameSettleMs: String, tapMs: String): String? = try {
-        settings.setLink(Settings.Link(frameSettleMs.toLong(), tapMs.toLong()))
+    fun setLinkConfig(frameSettleMs: String, tapDurationMs: String, tapIntervalMs: String, modelThreads: String): String? = try {
+        settings.setLink(Settings.Link(frameSettleMs.toLong(), tapDurationMs.toLong(), tapIntervalMs.toLong(), modelThreads.toInt()))
         null
     } catch (error: Exception) {
         "连线参数无效"

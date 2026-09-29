@@ -141,7 +141,9 @@ private fun SettingsDialog(
     val engine = uiState.let { viewModel.engineConfig() }
     val activeBook = uiState.let { viewModel.activeBookConfig() }
     var frameSettle by remember { mutableStateOf(config.frameSettleMs.toString()) }
-    var tap by remember { mutableStateOf(config.tapIntervalMs.toString()) }
+    var tapDuration by remember { mutableStateOf(config.tapDurationMs.toString()) }
+    var tapInterval by remember { mutableStateOf(config.tapIntervalMs.toString()) }
+    var modelThreads by remember { mutableStateOf(config.modelThreads.toString()) }
     var bookName by remember(activeBook?.id) { mutableStateOf(activeBook?.name.orEmpty()) }
     var editingRed by remember { mutableStateOf<Boolean?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -197,13 +199,15 @@ private fun SettingsDialog(
                 }
                 Text("连线高级参数", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
                 OutlinedTextField(frameSettle, { frameSettle = it; error = null }, label = { Text("帧稳定等待 ms") }, singleLine = true)
-                OutlinedTextField(tap, { tap = it; error = null }, label = { Text("双击间隔 ms") }, singleLine = true)
+                OutlinedTextField(tapDuration, { tapDuration = it; error = null }, label = { Text("单击持续 ms（1–100）") }, singleLine = true)
+                OutlinedTextField(tapInterval, { tapInterval = it; error = null }, label = { Text("两击等待 ms（0–500）") }, singleLine = true)
+                OutlinedTextField(modelThreads, { modelThreads = it; error = null }, label = { Text("模型线程数（下次开始连线生效，1–8）") }, singleLine = true)
                 error?.let { Text(it, color = Color.Red) }
             }
         },
         confirmButton = {
             TextButton({
-                error = viewModel.setLinkConfig(frameSettle, tap)
+                error = viewModel.setLinkConfig(frameSettle, tapDuration, tapInterval, modelThreads)
                 if (error == null) close()
             }) { Text("确定") }
         },

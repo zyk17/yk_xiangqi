@@ -49,13 +49,22 @@ public final class Settings {
     public static final class Link {
         /** 最后一张投屏帧到达后，等待多久再识别，避免动画中间态。 */
         public final long frameSettleMs;
+        /** 一次无障碍点击按下的持续时间。 */
+        public final long tapDurationMs;
+        /** 第一次点击完成后，第二次点击前的等待时间。 */
         public final long tapIntervalMs;
+        /** ONNX Runtime 单次推理可使用的 CPU 线程数。 */
+        public final int modelThreads;
 
-        public Link(long frameSettleMs, long tapIntervalMs) {
-            if (frameSettleMs < 0 || tapIntervalMs < 0 || tapIntervalMs > 200)
+        public Link(long frameSettleMs, long tapDurationMs, long tapIntervalMs, int modelThreads) {
+            if (frameSettleMs < 0 || tapDurationMs < 1 || tapDurationMs > 100
+                    || tapIntervalMs < 0 || tapIntervalMs > 500
+                    || modelThreads < 1 || modelThreads > 8)
                 throw new IllegalArgumentException("无效的连线参数");
             this.frameSettleMs = frameSettleMs;
+            this.tapDurationMs = tapDurationMs;
             this.tapIntervalMs = tapIntervalMs;
+            this.modelThreads = modelThreads;
         }
     }
 
@@ -165,12 +174,17 @@ public final class Settings {
     }
 
     public Link link() {
-        return new Link(preferences.getLong("link.frameSettleMs", 100), preferences.getLong("link.tapIntervalMs", 50));
+        return new Link(preferences.getLong("link.frameSettleMs", 100),
+                preferences.getLong("link.tapDurationMs", 30),
+                preferences.getLong("link.tapIntervalMs", 50),
+                preferences.getInt("link.modelThreads", 4));
     }
 
     public void setLink(Link value) {
         preferences.edit().putLong("link.frameSettleMs", value.frameSettleMs)
+            .putLong("link.tapDurationMs", value.tapDurationMs)
             .putLong("link.tapIntervalMs", value.tapIntervalMs)
+            .putInt("link.modelThreads", value.modelThreads)
             .remove("link.scanIntervalMs").remove("link.settleMs").remove("link.motionThreshold")
             .apply();
     }

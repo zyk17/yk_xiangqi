@@ -7,9 +7,11 @@ import com.yk.xiangqi.core.Side;
 /**
  * 从规范棋盘着法投影到外部屏幕的两个点击。
  */
-public record GesturePlan(BoardGeometry.Point from, BoardGeometry.Point to, long intervalMs) {
-    public static GesturePlan forMove(BoardGeometry geometry, Side bottomSide, Move move, long intervalMs) {
-        return new GesturePlan(point(geometry, bottomSide, move.from), point(geometry, bottomSide, move.to), intervalMs);
+public record GesturePlan(BoardGeometry.Point from, BoardGeometry.Point to, long tapDurationMs, long tapIntervalMs) {
+    public static GesturePlan forMove(BoardGeometry geometry, Side bottomSide, Move move,
+                                      long tapDurationMs, long tapIntervalMs) {
+        return new GesturePlan(point(geometry, bottomSide, move.from), point(geometry, bottomSide, move.to),
+                tapDurationMs, tapIntervalMs);
     }
 
     private static BoardGeometry.Point point(BoardGeometry geometry, Side bottomSide, int square) {
