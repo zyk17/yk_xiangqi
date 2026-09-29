@@ -10,28 +10,42 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.RotateRight
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,31 +58,36 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yk.xiangqi.Settings
 import com.yk.xiangqi.core.Move
+import com.yk.xiangqi.core.Side
 import kotlin.math.min
+import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun XiangqiApp(onStartLink: () -> Unit, viewModel: GameViewModel = viewModel()) {
     val state = viewModel.state
     var selected by remember { mutableIntStateOf(-1) }
     var settingsVisible by remember { mutableStateOf(false) }
+    var engineConfigVisible by remember { mutableStateOf(false) }
     val bookPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(viewModel::importBook) }
     val enginePicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(viewModel::importEngine) }
     val nnuePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(viewModel::importNetwork) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("YK 象棋") },
-                actions = {
-                    TextButton(onStartLink) { Text("连线") }
-                    TextButton({ settingsVisible = true }) { Text("设置") }
-                },
-            )
-        },
-    ) { padding ->
+    if (engineConfigVisible) {
+        EngineConfigPage(
+            viewModel = viewModel,
+            pickEngine = { engineConfigVisible = false; enginePicker.launch(arrayOf("*/*")) },
+            pickNetwork = { engineConfigVisible = false; nnuePicker.launch(arrayOf("*/*")) },
+        ) {
+            engineConfigVisible = false
+            settingsVisible = true
+        }
+        return
+    }
+
+    Scaffold { padding ->
         Column(
             modifier = Modifier
                 .padding(padding)
@@ -76,30 +95,33 @@ fun XiangqiApp(onStartLink: () -> Unit, viewModel: GameViewModel = viewModel()) 
                 .padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            TopControls(viewModel, state)
-            Text(state.status)
+            TopControls(viewModel, state, onStartLink) { settingsVisible = true }
             Board(
                 board = state.board,
                 flipped = state.flipped,
+                selected = selected,
                 pv = state.analysis?.pv.orEmpty(),
                 bothArrows = state.bothArrows,
             ) { square ->
-                if (selected < 0 && state.board[square] != '.') {
+                val piece = state.board[square]
+                val ours = piece != '.' && (piece.isUpperCase() == (state.side == Side.RED))
+                if (selected < 0 && ours) {
                     selected = square
                 } else if (selected >= 0) {
-                    viewModel.tap(selected, square)
-                    selected = -1
+                    if (ours) selected = if (square == selected) -1 else square
+                    else if (viewModel.tap(selected, square)) selected = -1
                 }
             }
             NavigationControls(viewModel, state.cursor, state.length)
-            EnginePanel(state, viewModel::optimizeBook, viewModel::removeBook, Modifier.weight(1f))
+            InfoPanel(state, viewModel::optimizeBook, viewModel::removeBook, Modifier.weight(1f))
             if (settingsVisible) {
                 SettingsDialog(
                     viewModel = viewModel,
-                    state = state,
                     pickBook = { bookPicker.launch(arrayOf("*/*")) },
-                    pickEngine = { enginePicker.launch(arrayOf("*/*")) },
-                    pickNetwork = { nnuePicker.launch(arrayOf("*/*")) },
+                    openEngineConfig = {
+                        settingsVisible = false
+                        engineConfigVisible = true
+                    },
                 ) { settingsVisible = false }
             }
         }
@@ -109,20 +131,19 @@ fun XiangqiApp(onStartLink: () -> Unit, viewModel: GameViewModel = viewModel()) 
 @Composable
 private fun SettingsDialog(
     viewModel: GameViewModel,
-    state: UiState,
     pickBook: () -> Unit,
-    pickEngine: () -> Unit,
-    pickNetwork: () -> Unit,
+    openEngineConfig: () -> Unit,
     close: () -> Unit,
 ) {
+    val uiState = viewModel.state
     val config = viewModel.linkConfig()
-    val engine = viewModel.engineConfig()
+    val engine = uiState.let { viewModel.engineConfig() }
+    val activeBook = uiState.let { viewModel.activeBookConfig() }
+    var scan by remember { mutableStateOf(config.scanIntervalMs.toString()) }
     var settle by remember { mutableStateOf(config.settleMs.toString()) }
     var threshold by remember { mutableStateOf(config.motionThreshold.toString()) }
     var tap by remember { mutableStateOf(config.tapIntervalMs.toString()) }
-    var threads by remember { mutableStateOf(engine.threads.toString()) }
-    var hashMb by remember { mutableStateOf(engine.hashMb.toString()) }
-    var multiPv by remember { mutableStateOf(engine.multiPv.toString()) }
+    var bookName by remember(activeBook?.id) { mutableStateOf(activeBook?.name.orEmpty()) }
     var editingRed by remember { mutableStateOf<Boolean?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
@@ -132,20 +153,51 @@ private fun SettingsDialog(
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
                 Text("引擎", fontWeight = FontWeight.Bold)
                 Text("当前：${engine.name}")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton({ close(); pickEngine() }) { Text("导入 UCI 引擎") }
-                    TextButton({ close(); pickNetwork() }) { Text("导入 NNUE") }
-                }
-                OutlinedTextField(threads, { threads = it; error = null }, label = { Text("线程数") }, singleLine = true)
-                OutlinedTextField(hashMb, { hashMb = it; error = null }, label = { Text("Hash (MB)") }, singleLine = true)
-                OutlinedTextField(multiPv, { multiPv = it; error = null }, label = { Text("MultiPV") }, singleLine = true)
+                TextButton(openEngineConfig) { Text("配置 UCI 引擎") }
                 Row {
                     TextButton({ editingRed = true }) { Text("红方：${viewModel.goParamsLabel(true)}") }
                     TextButton({ editingRed = false }) { Text("黑方：${viewModel.goParamsLabel(false)}") }
                 }
                 Text("开局库", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
                 TextButton({ close(); pickBook() }) { Text("选择 OBK 开局库") }
+                if (activeBook == null) {
+                    Text("当前未选择")
+                } else {
+                    Text("当前：${activeBook.name}")
+                    viewModel.books().forEach { candidate ->
+                        TextButton({ viewModel.selectBook(candidate.id) }, enabled = candidate.id != activeBook.id) {
+                            Text(if (candidate.id == activeBook.id) "● ${candidate.name}（当前）" else candidate.name)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = bookName,
+                        onValueChange = { bookName = it; error = null },
+                        label = { Text("开局库名称") },
+                        singleLine = true,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("启用", Modifier.weight(1f))
+                        Switch(activeBook.enabled, onCheckedChange = {
+                            error = viewModel.setBookConfig(bookName, it, activeBook.order)
+                        })
+                    }
+                    Text("自动走子策略")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { error = viewModel.setBookConfig(bookName, activeBook.enabled, Settings.Book.Order.MAX_SCORE) },
+                            enabled = activeBook.order != Settings.Book.Order.MAX_SCORE,
+                        ) { Text("最高分") }
+                        OutlinedButton(
+                            onClick = { error = viewModel.setBookConfig(bookName, activeBook.enabled, Settings.Book.Order.RANDOM) },
+                            enabled = activeBook.order != Settings.Book.Order.RANDOM,
+                        ) { Text("完全随机") }
+                    }
+                    TextButton({ error = viewModel.setBookConfig(bookName, activeBook.enabled, activeBook.order) }) { Text("保存开局库设置") }
+                    TextButton(viewModel::optimizeBook) { Text("建立旁路索引") }
+                    TextButton(viewModel::deleteBook) { Text("删除当前开局库") }
+                }
                 Text("连线高级参数", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+                OutlinedTextField(scan, { scan = it; error = null }, label = { Text("扫描间隔 ms") }, singleLine = true)
                 OutlinedTextField(settle, { settle = it; error = null }, label = { Text("静止时间 ms") }, singleLine = true)
                 OutlinedTextField(threshold, { threshold = it; error = null }, label = { Text("运动阈值 0–1") }, singleLine = true)
                 OutlinedTextField(tap, { tap = it; error = null }, label = { Text("双击间隔 ms") }, singleLine = true)
@@ -154,8 +206,7 @@ private fun SettingsDialog(
         },
         confirmButton = {
             TextButton({
-                error = viewModel.setEngineConfig(threads, hashMb, multiPv)
-                    ?: viewModel.setLinkConfig(settle, threshold, tap)
+                error = viewModel.setLinkConfig(scan, settle, threshold, tap)
                 if (error == null) close()
             }) { Text("确定") }
         },
@@ -164,18 +215,120 @@ private fun SettingsDialog(
     editingRed?.let { red -> LimitDialog(red, viewModel) { editingRed = null } }
 }
 
+/** UCI 声明的配置很多，独立页面避免挤占应用设置。 */
 @Composable
-private fun TopControls(viewModel: GameViewModel, state: UiState) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        OutlinedButton({ viewModel.setAi(true, !state.redAi) }, Modifier.weight(1f)) { Text(if (state.redAi) "红 AI 开" else "红 AI") }
-        OutlinedButton({ viewModel.setAi(false, !state.blackAi) }, Modifier.weight(1f)) { Text(if (state.blackAi) "黑 AI 开" else "黑 AI") }
-        Button(viewModel::query, Modifier.weight(1f), enabled = state.mode != PlayMode.QUERY) { Text("查询") }
+private fun EngineConfigPage(
+    viewModel: GameViewModel,
+    pickEngine: () -> Unit,
+    pickNetwork: () -> Unit,
+    back: () -> Unit,
+) {
+    val uiState = viewModel.state
+    val engine = uiState.let { viewModel.engineConfig() }
+    val uciOptions = uiState.let { viewModel.engineOptions() }
+    var threads by remember(engine.id) { mutableStateOf(engine.threads.toString()) }
+    var hashMb by remember(engine.id) { mutableStateOf(engine.hashMb.toString()) }
+    var engineName by remember(engine.id) { mutableStateOf(engine.name) }
+    var optionValues by remember(engine.id, uciOptions) {
+        mutableStateOf(uciOptions.filter { it.type != "button" }.associate { option ->
+            option.name to (engine.options[option.name] ?: option.defaultValue ?: if (option.type == "check") "false" else "")
+        })
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        OutlinedButton(viewModel::flip, Modifier.weight(1f)) { Text(if (state.flipped) "正向" else "翻转") }
-        OutlinedButton(viewModel::arrows, Modifier.weight(1f)) { Text(if (state.bothArrows) "双箭头" else "单箭头") }
-        Button(viewModel::immediate, Modifier.weight(1f)) { Text("立即出招") }
-        OutlinedButton(viewModel::alternative, Modifier.weight(1f)) { Text("变招") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    Scaffold { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(back) { Text("返回") }
+                Text("引擎配置", fontWeight = FontWeight.Bold)
+            }
+            Text("当前：${engine.name}")
+            viewModel.engines().forEach { candidate ->
+                TextButton({ viewModel.selectEngine(candidate.id) }, enabled = candidate.id != engine.id) {
+                    Text(if (candidate.id == engine.id) "● ${candidate.name}（当前）" else candidate.name)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(pickEngine) { Text("导入 UCI 引擎") }
+                TextButton(pickNetwork) { Text("导入 NNUE") }
+            }
+            OutlinedTextField(threads, { threads = it; error = null }, label = { Text("线程数") }, singleLine = true)
+            OutlinedTextField(hashMb, { hashMb = it; error = null }, label = { Text("Hash (MB)") }, singleLine = true)
+            OutlinedTextField(engineName, { engineName = it; error = null }, label = { Text("引擎名称") }, singleLine = true)
+            TextButton({ error = viewModel.renameEngine(engineName) }) { Text("保存引擎名称") }
+            if (uciOptions.isNotEmpty()) Text("引擎选项", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
+            uciOptions.forEach { option ->
+                if (option.type == "button") {
+                    TextButton({ viewModel.pressEngineOption(option.name) }) { Text(option.name) }
+                    return@forEach
+                }
+                val value = optionValues[option.name].orEmpty()
+                if (option.type == "check") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(option.name, Modifier.weight(1f))
+                        Switch(
+                            checked = value.equals("true", true),
+                            onCheckedChange = { optionValues = optionValues + (option.name to it.toString()) },
+                        )
+                    }
+                } else {
+                    OutlinedTextField(
+                        value,
+                        { optionValues = optionValues + (option.name to it); error = null },
+                        label = { Text(option.name) },
+                        supportingText = {
+                            val hint = when {
+                                option.type == "spin" -> "${option.min ?: ""} – ${option.max ?: ""}"
+                                option.type == "combo" -> option.vars.joinToString(" / ")
+                                else -> null
+                            }
+                            if (hint != null) Text(hint)
+                        },
+                        singleLine = true,
+                    )
+                }
+            }
+            error?.let { Text(it, color = Color.Red) }
+            Button(
+                onClick = { error = viewModel.setEngineConfig(threads, hashMb, optionValues) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+            ) { Text("保存引擎配置") }
+            if (engine.id != Settings.BUNDLED_ENGINE_ID) {
+                TextButton(viewModel::deleteEngine, Modifier.fillMaxWidth()) { Text("删除当前引擎") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopControls(viewModel: GameViewModel, state: UiState, startLink: () -> Unit, openSettings: () -> Unit) {
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            ActionIcon({ viewModel.setAi(true, !state.redAi) }, Icons.Default.Person, "红方 AI", if (state.redAi) Color(0xffc62828) else Color.Gray)
+            ActionIcon({ viewModel.setAi(false, !state.blackAi) }, Icons.Default.Person, "黑方 AI", if (state.blackAi) Color(0xff202020) else Color.Gray)
+            ActionIcon(viewModel::query, Icons.Default.Search, "查询模式", if (state.mode == PlayMode.QUERY) Color(0xff1565c0) else Color.Gray)
+            ActionIcon(viewModel::flip, Icons.AutoMirrored.Filled.RotateRight, if (state.flipped) "恢复正向" else "翻转棋盘")
+            ActionIcon(viewModel::arrows, Icons.Default.SwapHoriz, if (state.bothArrows) "切换为单箭头" else "切换为双箭头")
+            ActionIcon(viewModel::immediate, Icons.Default.Bolt, "立即出招")
+            ActionIcon(viewModel::alternative, Icons.Default.Block, "变招")
+            ActionIcon(startLink, Icons.Default.Link, "连线")
+            ActionIcon(openSettings, Icons.Default.Settings, "设置")
+        }
+    }
+}
+
+@Composable
+private fun RowScope.ActionIcon(onClick: () -> Unit, image: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color = Color.Unspecified) {
+    IconButton(onClick, Modifier.weight(1f).height(36.dp)) {
+        Icon(image, label, Modifier.size(20.dp), tint)
     }
 }
 
@@ -248,7 +401,7 @@ private fun NavigationControls(viewModel: GameViewModel, cursor: Int, length: In
 }
 
 @Composable
-private fun EnginePanel(state: UiState, optimize: () -> Unit, remove: () -> Unit, modifier: Modifier) {
+private fun InfoPanel(state: UiState, optimize: () -> Unit, remove: () -> Unit, modifier: Modifier) {
     val engine = state.analysis
     Card(
         modifier
@@ -256,17 +409,17 @@ private fun EnginePanel(state: UiState, optimize: () -> Unit, remove: () -> Unit
             .padding(top = 8.dp)
     ) {
         Column(Modifier.padding(10.dp).verticalScroll(rememberScrollState())) {
-            Text("引擎输出", fontWeight = FontWeight.Bold)
+            Text("信息", fontWeight = FontWeight.Bold)
+            Text(state.status)
             Text("Q ${engine?.score ?: "—"}    深度 ${engine?.depth ?: "—"}    用时 ${engine?.timeMs ?: "—"} ms")
             Text("NPS ${engine?.nps ?: "—"}    节点 ${engine?.nodes ?: "—"}")
-            Text("WDL ${engine?.wdl?.let { "${it.win}/${it.draw}/${it.loss}" } ?: "—"}")
             Text("主变", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
             Text(engine?.pv?.joinToString(" ") ?: "等待分析")
             if (state.book.isEmpty() && state.bookName == null) return@Column
             Text("开局库", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
             Text(state.bookName ?: "未选择")
             if (state.bookNeedsOptimization) OutlinedButton(optimize) { Text("建立旁路索引") }
-            if (state.bookName != null) TextButton(remove) { Text("移除开局库") }
+            if (state.bookName != null) TextButton(remove) { Text("取消选择书库") }
             state.book.take(5).forEach { candidate ->
                 Text("${candidate.move}  分 ${candidate.score}  胜率 ${"%.1f".format(candidate.winRate() * 100)}%")
             }
@@ -275,7 +428,8 @@ private fun EnginePanel(state: UiState, optimize: () -> Unit, remove: () -> Unit
 }
 
 @Composable
-private fun Board(board: CharArray, flipped: Boolean, pv: List<String>, bothArrows: Boolean, click: (Int) -> Unit) {
+private fun Board(board: CharArray, flipped: Boolean, selected: Int, pv: List<String>, bothArrows: Boolean, click: (Int) -> Unit) {
+    val latestClick by rememberUpdatedState(click)
     Canvas(
         Modifier
             .fillMaxWidth()
@@ -283,11 +437,11 @@ private fun Board(board: CharArray, flipped: Boolean, pv: List<String>, bothArro
             .pointerInput(flipped) {
                 detectTapGestures { offset ->
                     val cell = min(size.width / 9f, size.height / 10f)
-                    val file = ((offset.x - (size.width - cell * 8) / 2) / cell).toInt()
-                    val rank = ((offset.y - (size.height - cell * 9) / 2) / cell).toInt()
+                    val file = ((offset.x - (size.width - cell * 8) / 2) / cell).roundToInt()
+                    val rank = ((offset.y - (size.height - cell * 9) / 2) / cell).roundToInt()
                     if (file in 0..8 && rank in 0..9) {
                         val square = (if (flipped) rank else 9 - rank) * 9 + if (flipped) 8 - file else file
-                        click(square)
+                        latestClick(square)
                     }
                 }
             },
@@ -298,6 +452,7 @@ private fun Board(board: CharArray, flipped: Boolean, pv: List<String>, bothArro
         drawBoard(originX, originY, cell)
         drawPvArrows(pv, bothArrows, flipped, originX, originY, cell)
         drawPieces(board, flipped, originX, originY, cell)
+        if (selected >= 0) drawCircle(Color(0xff00a152), cell * .43f, point(selected, flipped, originX, originY, cell), style = Stroke(4f))
     }
 }
 

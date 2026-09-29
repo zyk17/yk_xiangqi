@@ -13,18 +13,17 @@ public final class Settings {
 
     public static final class Engine {
         public final String id, name, directory;
-        public final int threads, hashMb, multiPv;
+        public final int threads, hashMb;
         public final Map<String, String> options;
 
-        public Engine(String id, String name, String directory, int threads, int hashMb, int multiPv, Map<String, String> options) {
-            if (id == null || id.isEmpty() || name == null || name.isEmpty() || threads <= 0 || hashMb <= 0 || multiPv <= 0)
+        public Engine(String id, String name, String directory, int threads, int hashMb, Map<String, String> options) {
+            if (id == null || id.isEmpty() || name == null || name.isEmpty() || threads <= 0 || hashMb <= 0)
                 throw new IllegalArgumentException("无效的引擎配置");
             this.id = id;
             this.name = name;
             this.directory = directory;
             this.threads = threads;
             this.hashMb = hashMb;
-            this.multiPv = multiPv;
             this.options = Collections.unmodifiableMap(new LinkedHashMap<>(options));
         }
     }
@@ -48,12 +47,18 @@ public final class Settings {
     }
 
     public static final class Link {
-        public final long settleMs, tapIntervalMs;
+        public final long scanIntervalMs, settleMs, tapIntervalMs;
         public final float motionThreshold;
 
+        /** 兼容旧调用；默认每 100ms 取一帧进入门控。 */
         public Link(long settleMs, float motionThreshold, long tapIntervalMs) {
-            if (settleMs < 0 || !(motionThreshold >= 0 && motionThreshold <= 1) || tapIntervalMs < 0 || tapIntervalMs > 200)
+            this(100, settleMs, motionThreshold, tapIntervalMs);
+        }
+
+        public Link(long scanIntervalMs, long settleMs, float motionThreshold, long tapIntervalMs) {
+            if (scanIntervalMs <= 0 || settleMs < 0 || !(motionThreshold >= 0 && motionThreshold <= 1) || tapIntervalMs < 0 || tapIntervalMs > 200)
                 throw new IllegalArgumentException("无效的连线参数");
+            this.scanIntervalMs = scanIntervalMs;
             this.settleMs = settleMs;
             this.motionThreshold = motionThreshold;
             this.tapIntervalMs = tapIntervalMs;
@@ -84,9 +89,35 @@ public final class Settings {
         Set<String> ids = ids(ENGINE_IDS);
         if (!BUNDLED_ENGINE_ID.equals(value.id)) ids.add(value.id);
         String p = "engine." + value.id + ".";
-        SharedPreferences.Editor e = preferences.edit().putStringSet(ENGINE_IDS, ids).putString(p + "name", value.name).putString(p + "directory", value.directory).putInt(p + "threads", value.threads).putInt(p + "hash", value.hashMb).putInt(p + "multiPv", value.multiPv).putStringSet(p + "optionNames", new LinkedHashSet<>(value.options.keySet()));
+        SharedPreferences.Editor e = preferences.edit().putStringSet(ENGINE_IDS, ids).putString(p + "name", value.name).putString(p + "directory", value.directory).putInt(p + "threads", value.threads).putInt(p + "hash", value.hashMb).putStringSet(p + "optionNames", new LinkedHashSet<>(value.options.keySet())).remove(p + "multiPv").remove(p + "option.MultiPV");
         for (Map.Entry<String, String> option : value.options.entrySet()) e.putString(p + "option." + option.getKey(), option.getValue());
         if (active) e.putString(ACTIVE_ENGINE, value.id);
+        e.apply();
+    }
+
+    public void selectEngine(String id) {
+        for (Engine value : engines()) {
+            if (value.id.equals(id)) {
+                preferences.edit().putString(ACTIVE_ENGINE, id).apply();
+                return;
+            }
+        }
+        throw new IllegalArgumentException("未知引擎配置");
+    }
+
+    /** 删除自定义引擎配置；内置 Pikafish 始终保留。 */
+    public void removeEngine(String id) {
+        if (BUNDLED_ENGINE_ID.equals(id))
+            throw new IllegalArgumentException("不能删除内置引擎");
+        Set<String> ids = ids(ENGINE_IDS);
+        if (!ids.remove(id))
+            throw new IllegalArgumentException("未知引擎配置");
+        String p = "engine." + id + ".";
+        SharedPreferences.Editor e = preferences.edit().putStringSet(ENGINE_IDS, ids)
+            .remove(p + "name").remove(p + "directory").remove(p + "threads").remove(p + "hash")
+            .remove(p + "multiPv").remove(p + "optionNames").remove(p + "option.MultiPV");
+        if (id.equals(preferences.getString(ACTIVE_ENGINE, BUNDLED_ENGINE_ID)))
+            e.putString(ACTIVE_ENGINE, BUNDLED_ENGINE_ID);
         e.apply();
     }
 
@@ -112,12 +143,39 @@ public final class Settings {
         e.apply();
     }
 
+    public void selectBook(String id) {
+        for (Book value : books()) {
+            if (value.id.equals(id)) {
+                preferences.edit().putString(ACTIVE_BOOK, id).apply();
+                return;
+            }
+        }
+        throw new IllegalArgumentException("未知书库配置");
+    }
+
+    public void clearActiveBook() {
+        preferences.edit().remove(ACTIVE_BOOK).apply();
+    }
+
+    /** 删除书库配置；书库文件由业务层在关闭连接后清理。 */
+    public void removeBook(String id) {
+        Set<String> ids = ids(BOOK_IDS);
+        if (!ids.remove(id))
+            throw new IllegalArgumentException("未知书库配置");
+        String p = "book." + id + ".";
+        SharedPreferences.Editor e = preferences.edit().putStringSet(BOOK_IDS, ids)
+            .remove(p + "name").remove(p + "path").remove(p + "enabled").remove(p + "order");
+        if (id.equals(preferences.getString(ACTIVE_BOOK, null)))
+            e.remove(ACTIVE_BOOK);
+        e.apply();
+    }
+
     public Link link() {
-        return new Link(preferences.getLong("link.settleMs", 100), preferences.getFloat("link.motionThreshold", .02f), preferences.getLong("link.tapIntervalMs", 50));
+        return new Link(preferences.getLong("link.scanIntervalMs", 100), preferences.getLong("link.settleMs", 100), preferences.getFloat("link.motionThreshold", .02f), preferences.getLong("link.tapIntervalMs", 50));
     }
 
     public void setLink(Link value) {
-        preferences.edit().putLong("link.settleMs", value.settleMs).putFloat("link.motionThreshold", value.motionThreshold).putLong("link.tapIntervalMs", value.tapIntervalMs).apply();
+        preferences.edit().putLong("link.scanIntervalMs", value.scanIntervalMs).putLong("link.settleMs", value.settleMs).putFloat("link.motionThreshold", value.motionThreshold).putLong("link.tapIntervalMs", value.tapIntervalMs).apply();
     }
 
     private Engine readEngine(String id) {
@@ -125,10 +183,10 @@ public final class Settings {
         Map<String, String> options = new LinkedHashMap<>();
         for (String name : ids(p + "optionNames")) {
             String value = preferences.getString(p + "option." + name, null);
-            if (value != null) options.put(name, value);
+            if (value != null && !"MultiPV".equalsIgnoreCase(name)) options.put(name, value);
         }
         String name = preferences.getString(p + "name", BUNDLED_ENGINE_ID.equals(id) ? "Pikafish" : id);
-        return new Engine(id, name, preferences.getString(p + "directory", null), preferences.getInt(p + "threads", 1), preferences.getInt(p + "hash", 64), preferences.getInt(p + "multiPv", 1), options);
+        return new Engine(id, name, preferences.getString(p + "directory", null), preferences.getInt(p + "threads", 1), preferences.getInt(p + "hash", 64), options);
     }
 
     private Book readBook(String id) {

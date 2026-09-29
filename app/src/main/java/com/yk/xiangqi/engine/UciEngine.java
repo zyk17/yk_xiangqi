@@ -32,7 +32,7 @@ public final class UciEngine implements Closeable {
         void onReady();
 
         /**
-         * 每个 200ms 读取周期内最多交付一条最新 info。
+         * 每个 200ms 读取周期内最多交付一条最新的完整主变。
          */
         void onInfo(long searchId, ThinkingInfo info);
 
@@ -48,6 +48,7 @@ public final class UciEngine implements Closeable {
     private BufferedReader stdout;
     private final AtomicLong searchId = new AtomicLong();
     private List<UciOption> declaredOptions = List.of();
+
     public UciEngine(Listener listener) {
         this.listener = listener;
     }
@@ -94,6 +95,25 @@ public final class UciEngine implements Closeable {
                 listener.onReady();
             } catch (Exception e) {
                 listener.onEngineFailed("引擎配置失败: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * 触发一次 UCI button 选项，不把它当作持久化配置。
+     */
+    public void pressOption(String name) {
+        io.execute(() -> {
+            try {
+                if (stdin == null)
+                    throw new IOException("引擎尚未启动");
+                send(declaredOption(name).press());
+                send("isready");
+                if (!awaitReadyOk())
+                    throw new IOException("UCI ready timeout");
+                listener.onReady();
+            } catch (Exception e) {
+                listener.onEngineFailed("引擎选项执行失败: " + e.getMessage());
             }
         });
     }
@@ -189,11 +209,21 @@ public final class UciEngine implements Closeable {
 
     private void readSearch(long expected) throws IOException {
         while (true) {
-            String line = null;
-            while (stdout.ready())
-                line = stdout.readLine();
+            ThinkingInfo info = null;
+            BestMoveInfo bestMove = null;
+            while (stdout.ready()) {
+                String line = stdout.readLine();
+                if (line.startsWith("info")) {
+                    ThinkingInfo parsed = ThinkingInfo.parse(line);
+                    if (parsed != null && !parsed.pv.isEmpty())
+                        info = parsed;
+                } else if (line.startsWith("bestmove")) {
+                    bestMove = BestMoveInfo.parse(line);
+                    break;
+                }
+            }
 
-            if (line == null) {
+            if (info == null && bestMove == null) {
                 if (process == null || !process.isAlive())
                     throw new EOFException("引擎已退出");
                 pauseSearchRead();
@@ -201,15 +231,13 @@ public final class UciEngine implements Closeable {
             }
 
             boolean current = expected == searchId.get();
-            boolean bestMove = line.startsWith("bestmove");
             if (current) {
-                if (bestMove) {
-                    listener.onBestMove(expected, BestMoveInfo.parse(line));
-                } else if (line.startsWith("info")) {
-                    listener.onInfo(expected, ThinkingInfo.parse(line));
-                }
+                if (info != null)
+                    listener.onInfo(expected, info);
+                if (bestMove != null)
+                    listener.onBestMove(expected, bestMove);
             }
-            if (bestMove)
+            if (bestMove != null)
                 return;
             pauseSearchRead();
         }

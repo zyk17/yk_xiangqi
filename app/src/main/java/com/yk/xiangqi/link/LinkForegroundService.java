@@ -15,6 +15,7 @@ import android.media.projection.MediaProjectionManager;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.os.Looper;
 import android.util.DisplayMetrics;
 
 import androidx.core.content.IntentCompat;
@@ -45,6 +46,8 @@ public final class LinkForegroundService extends Service {
     private Side pendingSyncSide;
     private GameRuntime gameRuntime;
     private GameRuntime.Listener gameListener;
+    private GameRuntime.ArrowListener arrowListener;
+    private Handler main;
     private Settings settings;
     private int writtenPly = -1;
     private LinkOverlay overlay;
@@ -52,6 +55,7 @@ public final class LinkForegroundService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        main = new Handler(Looper.getMainLooper());
         settings = ((XiangqiApplication) getApplication()).settings();
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel(CHANNEL, "象棋连线", NotificationManager.IMPORTANCE_LOW));
@@ -105,12 +109,13 @@ public final class LinkForegroundService extends Service {
             return;
         }
         gameListener = (state, action, origin) -> {
-            if (origin != GameRuntime.Origin.LOCAL || !(action instanceof GameAction.Play)
-                || worker == null)
-                return;
-            worker.post(() -> writeLocalMove(state));
+            refreshMiniBoard(state);
+            if (origin == GameRuntime.Origin.LOCAL && action instanceof GameAction.Play && worker != null)
+                worker.post(() -> writeLocalMove(state));
         };
+        arrowListener = ignored -> refreshMiniBoard(gameRuntime.state());
         gameRuntime.addListener(gameListener);
+        gameRuntime.addArrowListener(arrowListener);
         overlay = new LinkOverlay(this, new LinkOverlay.Listener() {
             @Override
             public void onConfigured(BoardGeometry geometry) {
@@ -154,6 +159,7 @@ public final class LinkForegroundService extends Service {
 
     private void configure(BoardGeometry geometry, Side bottom) {
         overlay.showControls(gameRuntime.aiEnabled(bottom));
+        refreshMiniBoard(gameRuntime.state());
         postToWorker(() -> {
             loop.start(geometry, bottom);
             writtenPly = gameRuntime.state().moves().size();
@@ -165,6 +171,15 @@ public final class LinkForegroundService extends Service {
     private void postToWorker(Runnable task) {
         if (worker != null)
             worker.post(task);
+    }
+
+    /** 所有 WindowManager 操作都回到主线程；棋局与箭头可来自 UI 或帧 worker。 */
+    private void refreshMiniBoard(com.yk.xiangqi.core.GameState state) {
+        if (main != null)
+            main.post(() -> {
+                if (overlay != null)
+                    overlay.showMiniBoard(state, gameRuntime.arrows());
+            });
     }
 
     private void writeLocalMove(com.yk.xiangqi.core.GameState state) {
@@ -222,6 +237,7 @@ public final class LinkForegroundService extends Service {
         if (overlay != null) overlay.close();
         if (reader != null) reader.close();
         if (gameRuntime != null && gameListener != null) gameRuntime.removeListener(gameListener);
+        if (gameRuntime != null && arrowListener != null) gameRuntime.removeArrowListener(arrowListener);
         if (display != null) display.release();
         if (projection != null) projection.stop();
         if (loop != null) postToWorker(loop::close);

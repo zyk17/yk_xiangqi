@@ -58,7 +58,7 @@ public final class Obk implements AutoCloseable {
             List<MoveInfo> candidates = new ArrayList<>();
             readKey(zobrist.key(position), false, candidates);
             readKey(zobrist.mirroredKey(position), true, candidates);
-            candidates.sort((left, right) -> Integer.compare(right.score, left.score));
+            candidates.sort((left, right) -> Integer.compare(right.score(), left.score()));
             return candidates;
         } catch (Exception error) {
             throw new ObkException("读取 bhobk 开局库失败", error);
@@ -131,7 +131,6 @@ public final class Obk implements AutoCloseable {
         int indexedRows = 0;
         int skippedRows = 0;
         try (SQLiteDatabase database = SQLiteDatabase.openOrCreateDatabase(temporary, null)) {
-            database.execSQL("PRAGMA journal_mode=OFF");
             // id 是原 bhobk 表的主键，不是 key_index 自己的行号；字段名保持兼容既有 idx。
             database.execSQL("CREATE TABLE key_index(id INTEGER NOT NULL,vkey INTEGER NOT NULL)");
             database.beginTransaction();
@@ -215,12 +214,7 @@ public final class Obk implements AutoCloseable {
     }
 
     private static SQLiteDatabase openReadOnly(File path) {
-        SQLiteDatabase database = SQLiteDatabase.openDatabase(path.getPath(), null, SQLiteDatabase.OPEN_READONLY);
-        database.execSQL("PRAGMA query_only=ON");
-        database.execSQL("PRAGMA temp_store=MEMORY");
-        database.execSQL("PRAGMA cache_size=-65536");
-        database.execSQL("PRAGMA mmap_size=268435456");
-        return database;
+        return SQLiteDatabase.openDatabase(path.getPath(), null, SQLiteDatabase.OPEN_READONLY);
     }
 
     private static boolean isBookSchema(SQLiteDatabase database) {

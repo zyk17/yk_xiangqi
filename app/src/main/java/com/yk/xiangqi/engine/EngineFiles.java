@@ -59,6 +59,21 @@ public final class EngineFiles {
         return network;
     }
 
+    /** 只删除本应用创建的自定义引擎目录，不接受任意路径。 */
+    public static void deleteBundle(Context context, File directory) throws IOException {
+        File parent = new File(context.getFilesDir(), "engines").getCanonicalFile();
+        File target = directory.getCanonicalFile();
+        if (!parent.equals(target.getParentFile()) || !target.getName().startsWith("custom-"))
+            throw new IOException("不是可删除的自定义引擎目录");
+        File[] files = target.listFiles();
+        if (files != null)
+            for (File file : files)
+                if (!file.delete())
+                    throw new IOException("无法删除引擎文件: " + file.getName());
+        if (target.exists() && !target.delete())
+            throw new IOException("无法删除引擎目录");
+    }
+
     private static File newCustomDirectory(Context context) throws IOException {
         File parent = new File(context.getFilesDir(), "engines");
         ensureDirectory(parent);

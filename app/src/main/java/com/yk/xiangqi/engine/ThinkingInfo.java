@@ -30,11 +30,10 @@ public final class ThinkingInfo {
     public final Long eps;
     public final Wdl wdl;
     public final List<String> pv;
-    public final Integer multiPv;
     public final String comment;
 
     private ThinkingInfo(Integer score, Integer mate, Integer depth, Integer selDepth, Long timeMs, Long nodes, Long nps,
-        Long eps, Wdl wdl, List<String> pv, Integer multiPv, String comment) {
+        Long eps, Wdl wdl, List<String> pv, String comment) {
         this.score = score;
         this.mate = mate;
         this.depth = depth;
@@ -45,7 +44,6 @@ public final class ThinkingInfo {
         this.eps = eps;
         this.wdl = wdl;
         this.pv = pv == null ? Collections.emptyList() : Collections.unmodifiableList(pv);
-        this.multiPv = multiPv;
         this.comment = comment;
     }
 
@@ -57,7 +55,6 @@ public final class ThinkingInfo {
 
         Integer depth = integer(parts, "depth");
         Integer selDepth = integer(parts, "seldepth");
-        Integer multiPv = integer(parts, "multipv");
         Integer score = null;
         Integer mate = null;
         Long time = number(parts, "time");
@@ -78,7 +75,7 @@ public final class ThinkingInfo {
         Wdl wdl = wdl(parts);
         List<String> pv = pv(parts);
         String comment = comment(parts);
-        return new ThinkingInfo(score, mate, depth, selDepth, time, nodes, nps, eps, wdl, pv, multiPv, comment);
+        return new ThinkingInfo(score, mate, depth, selDepth, time, nodes, nps, eps, wdl, pv, comment);
     }
 
     private static Wdl wdl(String[] parts) {

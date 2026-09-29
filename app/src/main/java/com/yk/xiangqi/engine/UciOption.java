@@ -57,6 +57,13 @@ public final class UciOption {
         return UciEngine.setOption(name, value);
     }
 
+    /** 触发不持久化值的 button 选项。 */
+    public String press() {
+        if (!"button".equals(type))
+            throw new IllegalArgumentException(name + " 不是 button 选项");
+        return UciEngine.setOption(name, null);
+    }
+
     /** 引擎未声明、但仍需按 UCI 原样发送的兼容选项。 */
     static UciOption unknown(String name) { return new UciOption(name, "string", null, null, null, List.of()); }
 

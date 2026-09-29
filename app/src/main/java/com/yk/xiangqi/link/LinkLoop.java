@@ -16,7 +16,6 @@ import com.yk.xiangqi.core.Side;
  * 本类同步处理后返回一个 {@link LinkAction}；服务层负责应用该动作。</p>
  */
 public final class LinkLoop implements AutoCloseable {
-    private static final long FRAME_INTERVAL_MS = 33L;
     private static final int REPAIR_DIFFERENCE = 1;
     private static final int NEW_GAME_DIFFERENCE = 4;
     private static final ObservedBoard STANDARD_START = ObservedBoard.from(Position.start());
@@ -69,7 +68,7 @@ public final class LinkLoop implements AutoCloseable {
         if (stopped || geometry == null)
             return null;
         long now = SystemClock.elapsedRealtime();
-        if (now - lastFrameMs < FRAME_INTERVAL_MS)
+        if (now - lastFrameMs < config.scanIntervalMs)
             return null;
         lastFrameMs = now;
 
