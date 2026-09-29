@@ -13,8 +13,6 @@ import java.util.concurrent.atomic.AtomicLong;
  * 单一串行 UCI 进程；回调在它的工作线程中发出。
  */
 public final class UciEngine implements Closeable {
-    private static final long INFO_INTERVAL_MS = 200;
-
     public interface Listener {
         /**
          * 已收到 uciok；调用方现在可依据声明的 Option 选择配置。
@@ -31,9 +29,6 @@ public final class UciEngine implements Closeable {
          */
         void onReady();
 
-        /**
-         * 每个 200ms 读取周期内最多交付一条最新的完整主变。
-         */
         void onInfo(long searchId, ThinkingInfo info);
 
         void onBestMove(long searchId, BestMoveInfo info);
@@ -219,46 +214,19 @@ public final class UciEngine implements Closeable {
         if (output == null)
             return;
         while (true) {
-            ThinkingInfo info = null;
-            BestMoveInfo bestMove = null;
-            while (output.ready()) {
-                String line = output.readLine();
-                if (line.startsWith("info")) {
-                    ThinkingInfo parsed = ThinkingInfo.parse(line);
-                    if (parsed != null && !parsed.pv.isEmpty())
-                        info = parsed;
-                } else if (line.startsWith("bestmove")) {
-                    bestMove = BestMoveInfo.parse(line);
-                    break;
-                }
-            }
-
-            if (info == null && bestMove == null) {
-                if (process == null || !process.isAlive())
-                    throw new EOFException("引擎已退出");
-                pauseSearchRead();
-                continue;
-            }
-
-            boolean current = expected == searchId.get();
-            if (current) {
-                if (info != null)
+            String line = output.readLine();
+            if (line == null)
+                throw new EOFException("引擎已退出");
+            if (line.startsWith("info")) {
+                ThinkingInfo info = ThinkingInfo.parse(line);
+                if (expected == searchId.get() && info != null && !info.pv.isEmpty())
                     listener.onInfo(expected, info);
-                if (bestMove != null)
+            } else if (line.startsWith("bestmove")) {
+                BestMoveInfo bestMove = BestMoveInfo.parse(line);
+                if (expected == searchId.get())
                     listener.onBestMove(expected, bestMove);
-            }
-            if (bestMove != null)
                 return;
-            pauseSearchRead();
-        }
-    }
-
-    private static void pauseSearchRead() throws IOException {
-        try {
-            Thread.sleep(INFO_INTERVAL_MS);
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-            throw new IOException("引擎读取被中断", error);
+            }
         }
     }
 
