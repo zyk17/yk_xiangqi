@@ -1,10 +1,7 @@
 package com.yk.xiangqi.link;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 
-import com.yk.xiangqi.Settings;
 import com.yk.xiangqi.core.Board;
 import com.yk.xiangqi.core.Move;
 import com.yk.xiangqi.core.Position;
@@ -25,22 +22,10 @@ public final class LinkCoreTest {
     }
 
     @Test
-    public void motionGateOnlyAllowsOncePerStaticPeriod() {
-        MotionGate gate = new MotionGate();
-        Settings.Link config = new Settings.Link(100, .02f, 50);
-        assertFalse(gate.allow(new float[] {0f, 0f}, 0, config));
-        assertFalse(gate.allow(new float[] {0f, 0f}, 99, config));
-        assertTrue(gate.allow(new float[] {0f, 0f}, 100, config));
-        assertFalse(gate.allow(new float[] {0f, 0f}, 133, config));
-        assertFalse(gate.allow(new float[] {.1f, 0f}, 166, config));
-        assertTrue(gate.allow(new float[] {.1f, 0f}, 266, config));
-    }
-
-    @Test
     public void comparatorFindsObservedLegalMove() {
         Position position = Position.start();
         Move move = Move.parse("a3a4");
-        LinkAction action = loop().compare(position, screenForRed(ObservedBoard.from(position.play(move))));
+        LinkAction action = state().reduce(position, screenForRed(ObservedBoard.from(position.play(move))), 0L).action();
         assertEquals(LinkAction.Kind.PLAY, action.kind());
         assertEquals(move, action.move());
     }
@@ -49,7 +34,7 @@ public final class LinkCoreTest {
     public void comparatorIgnoresWrongPieceKinds() {
         Position position = Position.start();
         Move move = Move.parse("a3a4");
-        LinkAction action = loop().compare(position, screenForRed(wrongKinds(ObservedBoard.from(position.play(move)))));
+        LinkAction action = state().reduce(position, screenForRed(wrongKinds(ObservedBoard.from(position.play(move)))), 0L).action();
         assertEquals(LinkAction.Kind.PLAY, action.kind());
         assertEquals(move, action.move());
     }
@@ -58,21 +43,38 @@ public final class LinkCoreTest {
     public void comparatorHandlesBlackMoveAndCapture() {
         Position afterRed = Position.start().play(Move.parse("a3a4"));
         Move blackMove = Move.parse("a6a5");
-        LinkAction blackAction = loop().compare(afterRed, screenForRed(ObservedBoard.from(afterRed.play(blackMove))));
+        LinkAction blackAction = state().reduce(afterRed, screenForRed(ObservedBoard.from(afterRed.play(blackMove))), 0L).action();
         assertEquals(LinkAction.Kind.PLAY, blackAction.kind());
         assertEquals(blackMove, blackAction.move());
 
         Position beforeCapture = afterRed.play(blackMove);
         Move capture = Move.parse("a4a5");
-        LinkAction captureAction = loop().compare(beforeCapture, screenForRed(ObservedBoard.from(beforeCapture.play(capture))));
+        LinkAction captureAction = state().reduce(beforeCapture, screenForRed(ObservedBoard.from(beforeCapture.play(capture))), 0L).action();
         assertEquals(LinkAction.Kind.PLAY, captureAction.kind());
         assertEquals(capture, captureAction.move());
     }
 
     @Test
+    public void writebackWaitsForOldBoardThenAcceptsReply() {
+        Position afterRed = Position.start().play(Move.parse("a3a4"));
+        LinkState waiting = state().awaitWriteback(100L);
+
+        LinkResult oldBoard = waiting.reduce(afterRed, screenForRed(ObservedBoard.from(Position.start())), 101L);
+        assertEquals(LinkAction.Kind.NONE, oldBoard.action().kind());
+        assertEquals(LinkState.Phase.WAITING_WRITEBACK, oldBoard.state().phase());
+
+        Move reply = Move.parse("a6a5");
+        LinkResult response = oldBoard.state().reduce(afterRed,
+            screenForRed(ObservedBoard.from(afterRed.play(reply))), 102L);
+        assertEquals(LinkAction.Kind.PLAY, response.action().kind());
+        assertEquals(reply, response.action().move());
+        assertEquals(LinkState.Phase.NORMAL, response.state().phase());
+    }
+
+    @Test
     public void largeStructuralChangeIsNewGameInsteadOfDesync() {
         Position current = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5")).play(Move.parse("c3c4"));
-        LinkAction action = loop().compare(current, screenForRed(ObservedBoard.from(Position.start())));
+        LinkAction action = state().reduce(current, screenForRed(ObservedBoard.from(Position.start())), 0L).action();
         assertEquals(LinkAction.Kind.RESET, action.kind());
     }
 
@@ -105,8 +107,8 @@ public final class LinkCoreTest {
     @Test
     public void standardStartDetectsViewerSideFromScreenStructure() {
         ObservedBoard start = ObservedBoard.from(Position.start());
-        assertEquals(Side.RED, LinkLoop.standardStartBottom(start.orientForBottom(Side.RED)));
-        assertEquals(Side.BLACK, LinkLoop.standardStartBottom(start.orientForBottom(Side.BLACK)));
+        assertEquals(Side.RED, LinkState.standardStartBottom(start.orientForBottom(Side.RED)));
+        assertEquals(Side.BLACK, LinkState.standardStartBottom(start.orientForBottom(Side.BLACK)));
     }
 
     private static ObservedBoard wrongKinds(ObservedBoard board) {
@@ -123,9 +125,8 @@ public final class LinkCoreTest {
         return board.orientForBottom(Side.RED);
     }
 
-    private static LinkLoop loop() {
-        LinkLoop loop = new LinkLoop(null);
-        loop.start(new BoardGeometry(0, 0, 800, 900), Side.RED);
-        return loop;
+    private static LinkState state() {
+        ObservedBoard start = screenForRed(ObservedBoard.from(Position.start()));
+        return LinkState.start(Side.RED, Side.RED).synchronize(start, Side.RED).state();
     }
 }

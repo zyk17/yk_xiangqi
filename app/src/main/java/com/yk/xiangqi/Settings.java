@@ -47,20 +47,14 @@ public final class Settings {
     }
 
     public static final class Link {
-        public final long scanIntervalMs, settleMs, tapIntervalMs;
-        public final float motionThreshold;
+        /** 最后一张投屏帧到达后，等待多久再识别，避免动画中间态。 */
+        public final long frameSettleMs;
+        public final long tapIntervalMs;
 
-        /** 兼容旧调用；默认每 100ms 取一帧进入门控。 */
-        public Link(long settleMs, float motionThreshold, long tapIntervalMs) {
-            this(100, settleMs, motionThreshold, tapIntervalMs);
-        }
-
-        public Link(long scanIntervalMs, long settleMs, float motionThreshold, long tapIntervalMs) {
-            if (scanIntervalMs <= 0 || settleMs < 0 || !(motionThreshold >= 0 && motionThreshold <= 1) || tapIntervalMs < 0 || tapIntervalMs > 200)
+        public Link(long frameSettleMs, long tapIntervalMs) {
+            if (frameSettleMs < 0 || tapIntervalMs < 0 || tapIntervalMs > 200)
                 throw new IllegalArgumentException("无效的连线参数");
-            this.scanIntervalMs = scanIntervalMs;
-            this.settleMs = settleMs;
-            this.motionThreshold = motionThreshold;
+            this.frameSettleMs = frameSettleMs;
             this.tapIntervalMs = tapIntervalMs;
         }
     }
@@ -171,11 +165,14 @@ public final class Settings {
     }
 
     public Link link() {
-        return new Link(preferences.getLong("link.scanIntervalMs", 100), preferences.getLong("link.settleMs", 100), preferences.getFloat("link.motionThreshold", .02f), preferences.getLong("link.tapIntervalMs", 50));
+        return new Link(preferences.getLong("link.frameSettleMs", 100), preferences.getLong("link.tapIntervalMs", 50));
     }
 
     public void setLink(Link value) {
-        preferences.edit().putLong("link.scanIntervalMs", value.scanIntervalMs).putLong("link.settleMs", value.settleMs).putFloat("link.motionThreshold", value.motionThreshold).putLong("link.tapIntervalMs", value.tapIntervalMs).apply();
+        preferences.edit().putLong("link.frameSettleMs", value.frameSettleMs)
+            .putLong("link.tapIntervalMs", value.tapIntervalMs)
+            .remove("link.scanIntervalMs").remove("link.settleMs").remove("link.motionThreshold")
+            .apply();
     }
 
     private Engine readEngine(String id) {

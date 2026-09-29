@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Person
@@ -139,9 +140,7 @@ private fun SettingsDialog(
     val config = viewModel.linkConfig()
     val engine = uiState.let { viewModel.engineConfig() }
     val activeBook = uiState.let { viewModel.activeBookConfig() }
-    var scan by remember { mutableStateOf(config.scanIntervalMs.toString()) }
-    var settle by remember { mutableStateOf(config.settleMs.toString()) }
-    var threshold by remember { mutableStateOf(config.motionThreshold.toString()) }
+    var frameSettle by remember { mutableStateOf(config.frameSettleMs.toString()) }
     var tap by remember { mutableStateOf(config.tapIntervalMs.toString()) }
     var bookName by remember(activeBook?.id) { mutableStateOf(activeBook?.name.orEmpty()) }
     var editingRed by remember { mutableStateOf<Boolean?>(null) }
@@ -197,16 +196,14 @@ private fun SettingsDialog(
                     TextButton(viewModel::deleteBook) { Text("删除当前开局库") }
                 }
                 Text("连线高级参数", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
-                OutlinedTextField(scan, { scan = it; error = null }, label = { Text("扫描间隔 ms") }, singleLine = true)
-                OutlinedTextField(settle, { settle = it; error = null }, label = { Text("静止时间 ms") }, singleLine = true)
-                OutlinedTextField(threshold, { threshold = it; error = null }, label = { Text("运动阈值 0–1") }, singleLine = true)
+                OutlinedTextField(frameSettle, { frameSettle = it; error = null }, label = { Text("帧稳定等待 ms") }, singleLine = true)
                 OutlinedTextField(tap, { tap = it; error = null }, label = { Text("双击间隔 ms") }, singleLine = true)
                 error?.let { Text(it, color = Color.Red) }
             }
         },
         confirmButton = {
             TextButton({
-                error = viewModel.setLinkConfig(scan, settle, threshold, tap)
+                error = viewModel.setLinkConfig(frameSettle, tap)
                 if (error == null) close()
             }) { Text("确定") }
         },
@@ -312,6 +309,7 @@ private fun EngineConfigPage(
 private fun TopControls(viewModel: GameViewModel, state: UiState, startLink: () -> Unit, openSettings: () -> Unit) {
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            ActionIcon(viewModel::newGame, Icons.Default.AddBox, "新游戏")
             ActionIcon({ viewModel.setAi(true, !state.redAi) }, Icons.Default.Person, "红方 AI", if (state.redAi) Color(0xffc62828) else Color.Gray)
             ActionIcon({ viewModel.setAi(false, !state.blackAi) }, Icons.Default.Person, "黑方 AI", if (state.blackAi) Color(0xff202020) else Color.Gray)
             ActionIcon(viewModel::query, Icons.Default.Search, "查询模式", if (state.mode == PlayMode.QUERY) Color(0xff1565c0) else Color.Gray)

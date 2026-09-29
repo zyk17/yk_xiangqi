@@ -4,11 +4,11 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.yk.xiangqi.bridge.BoardProjection
@@ -34,6 +34,8 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
         const val MIN_SIZE = 48f
         const val HANDLE_RADIUS = 40f
         const val CONTROL_HEIGHT = 110f
+        const val RUNNING_PANEL_WIDTH_DP = 370
+        val MINI_BOARD_SIZES_DP = intArrayOf(100, 120, 140, 180)
         const val BUTTON_NONE = 0
         const val BUTTON_CANCEL = 1
         const val BUTTON_CONFIRM = 2
@@ -41,6 +43,7 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
 
     interface Listener {
         fun onConfigured(geometry: BoardGeometry)
+        fun onReconfigured(geometry: BoardGeometry, sideToMove: Side)
         fun onSelectionCancelled()
         fun onAiToggled(): Boolean
         fun onNewGameSideChanged(sideToMove: Side)
@@ -50,33 +53,30 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
 
     private val windows = context.getSystemService(WindowManager::class.java)
     private var selection: View? = null
-    private var controls: View? = null
-    private var controlParams: WindowManager.LayoutParams? = null
-    private var mini: View? = null
-    private var miniParams: WindowManager.LayoutParams? = null
+    private var panel: LinearLayout? = null
+    private var panelParams: WindowManager.LayoutParams? = null
     private var miniBoard: MiniBoardView? = null
     private var miniState: GameState? = null
     private var miniArrows: List<Move> = emptyList()
-    private var miniEnabled = false
+    private var miniVisible = true
+    private var miniSizeDp = 180
     private var syncSide = Side.RED
+    private var synchronizeAfterSelection = false
 
     /** 录屏启动后先展示轻量入口；用户切到第三方棋盘后再主动开始框选。 */
     fun showReady() {
-        miniEnabled = false
-        hideMiniBoard()
-        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(dragHandle("☰"))
-        val select = button("框选棋盘")
-        val stop = button("停止")
-        select.setOnClickListener { showSelection() }
-        stop.setOnClickListener { listener.onStop() }
-        row.addView(select)
-        row.addView(stop)
-        replaceControls(row)
+        miniVisible = false
+        miniBoard = null
+        val row = toolbar()
+        row.addView(dragHandle())
+        row.addView(iconButton("⌖", "框选棋盘", Color.WHITE) { showSelection(false) })
+        row.addView(iconButton("■", "停止连线", 0xffe57373.toInt()) { listener.onStop() })
+        replacePanel(row)
     }
 
-    fun showSelection() {
+    private fun showSelection(synchronizeAfterSelection: Boolean) {
         if (selection != null) return
+        this.synchronizeAfterSelection = synchronizeAfterSelection
         selection = SelectionView(context)
         windows.addView(selection, WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -88,38 +88,53 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
     }
 
     fun showControls(aiEnabled: Boolean) {
-        miniEnabled = true
-        val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        row.addView(dragHandle("☰"))
-        val ai = button(if (aiEnabled) "AI开" else "AI")
-        val side = button("红先")
-        val sync = button("同步")
-        val board = button("棋盘")
-        val stop = button("停止")
-        ai.setOnClickListener { ai.text = if (listener.onAiToggled()) "AI开" else "AI" }
-        side.setOnClickListener {
+        miniVisible = true
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.START
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = panelBackground()
+        }
+        val row = toolbar()
+        row.addView(dragHandle())
+        val ai = iconButton("♟", "切换自动走子", if (aiEnabled) 0xff66bb6a.toInt() else Color.WHITE) { button ->
+            val enabled = listener.onAiToggled()
+            button.setTextColor(if (enabled) 0xff66bb6a.toInt() else Color.WHITE)
+        }
+        val side = iconButton("●", "红先", 0xffd32f2f.toInt()) { button ->
             syncSide = if (syncSide == Side.RED) Side.BLACK else Side.RED
-            side.text = if (syncSide == Side.RED) "红先" else "黑先"
+            button.setTextColor(if (syncSide == Side.RED) 0xffd32f2f.toInt() else 0xff263238.toInt())
+            button.contentDescription = if (syncSide == Side.RED) "红先" else "黑先"
             listener.onNewGameSideChanged(syncSide)
         }
-        sync.setOnClickListener { listener.onSynchronize(syncSide) }
-        board.setOnClickListener { toggleMiniBoard() }
-        stop.setOnClickListener { listener.onStop() }
+        val sync = iconButton("↻", "同步当前局面", Color.WHITE) { listener.onSynchronize(syncSide) }
+        val board = iconButton("▦", "收起小棋盘", 0xff81d4fa.toInt()) { button -> toggleMiniBoard(button) }
+        val size = iconButton("⤢", "切换小棋盘大小，当前 ${miniSizeDp}dp", Color.WHITE) { button -> cycleMiniBoardSize(button) }
+        val select = iconButton("⌖", "重新框选棋盘", Color.WHITE) { showSelection(true) }
+        val stop = iconButton("■", "停止连线", 0xffe57373.toInt()) { listener.onStop() }
         row.addView(ai)
         row.addView(side)
         row.addView(sync)
         row.addView(board)
+        row.addView(size)
+        row.addView(select)
         row.addView(stop)
-        replaceControls(row)
+        root.addView(row)
+        miniBoard = MiniBoardView(context)
+        root.addView(miniBoard, LinearLayout.LayoutParams(dp(miniSizeDp), dp(miniSizeDp * 10 / 9)))
+        replacePanel(root, min(dp(RUNNING_PANEL_WIDTH_DP), context.resources.displayMetrics.widthPixels))
+        miniState?.let { miniBoard?.update(it, miniArrows) }
     }
 
-    private fun replaceControls(row: View) {
-        val x = controlParams?.x ?: 16
-        val y = controlParams?.y ?: defaultControlY()
-        remove(controls)
-        controls = row
-        controlParams = overlayParams(x, y)
-        windows.addView(row, controlParams)
+    private fun replacePanel(next: LinearLayout, width: Int = WindowManager.LayoutParams.WRAP_CONTENT) {
+        val metrics = context.resources.displayMetrics
+        val oldX = panelParams?.x ?: 16
+        val x = if (width > 0) oldX.coerceIn(0, max(0, metrics.widthPixels - width)) else oldX
+        val y = panelParams?.y ?: defaultControlY()
+        remove(panel)
+        panel = next
+        panelParams = overlayParams(x, y, width)
+        windows.addView(next, panelParams)
     }
 
     private fun defaultControlY(): Int {
@@ -131,43 +146,28 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
     fun showMiniBoard(state: GameState, arrows: List<Move>) {
         miniState = state
         miniArrows = arrows
-        if (!miniEnabled)
-            return
-        if (mini == null) {
-            val density = context.resources.displayMetrics.density
-            val size = (230 * density).toInt()
-            val panel = LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundColor(0xdd202020.toInt())
-                addView(dragHandle("☰ 小棋盘"))
-            }
-            miniBoard = MiniBoardView(context)
-            panel.addView(miniBoard, LinearLayout.LayoutParams(size, (size * 10f / 9f).toInt()))
-            mini = panel
-            miniParams = overlayParams(16, 360)
-            windows.addView(panel, miniParams)
-        }
         miniBoard?.update(state, arrows)
     }
 
-    private fun toggleMiniBoard() {
-        miniEnabled = !miniEnabled
-        if (!miniEnabled) {
-            hideMiniBoard()
-        } else {
-            miniState?.let { showMiniBoard(it, miniArrows) }
+    private fun toggleMiniBoard(button: TextView) {
+        miniVisible = !miniVisible
+        miniBoard?.visibility = if (miniVisible) View.VISIBLE else View.GONE
+        button.contentDescription = if (miniVisible) "收起小棋盘" else "展开小棋盘"
+        button.setTextColor(if (miniVisible) 0xff81d4fa.toInt() else Color.WHITE)
+    }
+
+    private fun cycleMiniBoardSize(button: TextView) {
+        val index = MINI_BOARD_SIZES_DP.indexOf(miniSizeDp)
+        miniSizeDp = MINI_BOARD_SIZES_DP[(index + 1) % MINI_BOARD_SIZES_DP.size]
+        miniBoard?.layoutParams = miniBoard?.layoutParams?.apply {
+            width = dp(miniSizeDp)
+            height = dp(miniSizeDp * 10 / 9)
         }
+        button.contentDescription = "切换小棋盘大小，当前 ${miniSizeDp}dp"
     }
 
-    private fun hideMiniBoard() {
-        remove(mini)
-        mini = null
-        miniParams = null
-        miniBoard = null
-    }
-
-    private fun overlayParams(x: Int, y: Int) = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
+    private fun overlayParams(x: Int, y: Int, width: Int = WindowManager.LayoutParams.WRAP_CONTENT) = WindowManager.LayoutParams(
+            width,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
@@ -178,21 +178,44 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
             this.y = y
         }
 
-    /** 拖动手柄才移动悬浮窗，普通按钮仍保持即时点击。 */
-    private fun dragHandle(text: String): TextView = TextView(context).apply {
-        this.text = text
+    private fun toolbar() = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+
+    private fun iconButton(symbol: String, description: String, color: Int, action: (TextView) -> Unit): TextView = TextView(context).apply {
+        text = symbol
+        contentDescription = description
         setTextColor(Color.WHITE)
-        textSize = 18f
-        setPadding(18, 12, 18, 12)
-        setBackgroundColor(0xdd404040.toInt())
+        textSize = 20f
+        gravity = Gravity.CENTER
+        background = iconBackground()
+        layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(2) }
+        setTextColor(color)
+        setOnClickListener { action(this) }
+    }
+
+    /** 拖动手柄才移动整个面板，普通图标仍保持即时点击。 */
+    private fun dragHandle(): TextView = object : TextView(context) {
+        override fun performClick(): Boolean {
+            super.performClick()
+            return true
+        }
+    }.apply {
+        text = "☰"
+        contentDescription = "移动连线面板"
+        setTextColor(Color.WHITE)
+        textSize = 20f
+        gravity = Gravity.CENTER
+        background = iconBackground()
+        layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(2) }
         var rawX = 0f
         var rawY = 0f
         var startX = 0
         var startY = 0
-        setOnTouchListener { view, event ->
-            val target = if (view.parent === controls) controls to controlParams else mini to miniParams
-            val window = target.first ?: return@setOnTouchListener true
-            val params = target.second ?: return@setOnTouchListener true
+        setOnTouchListener { _, event ->
+            val window = panel ?: return@setOnTouchListener true
+            val params = panelParams ?: return@setOnTouchListener true
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     rawX = event.rawX
@@ -201,10 +224,14 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
                     startY = params.y
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    params.x = startX + (event.rawX - rawX).toInt()
-                    params.y = startY + (event.rawY - rawY).toInt()
+                    val metrics = context.resources.displayMetrics
+                    val maxX = max(0, metrics.widthPixels - window.width)
+                    val maxY = max(0, metrics.heightPixels - window.height)
+                    params.x = (startX + (event.rawX - rawX).toInt()).coerceIn(0, maxX)
+                    params.y = (startY + (event.rawY - rawY).toInt()).coerceIn(0, maxY)
                     windows.updateViewLayout(window, params)
                 }
+                MotionEvent.ACTION_UP -> performClick()
             }
             true
         }
@@ -212,15 +239,12 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
 
     fun close() {
         remove(selection)
-        remove(controls)
-        remove(mini)
+        remove(panel)
         selection = null
-        controls = null
-        controlParams = null
-        mini = null
+        panel = null
+        panelParams = null
         miniBoard = null
-        miniParams = null
-        miniEnabled = false
+        miniVisible = false
     }
 
     private fun removeSelection() {
@@ -232,7 +256,19 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
         if (view != null) windows.removeView(view)
     }
 
-    private fun button(text: String): Button = Button(context).apply { this.text = text }
+    private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
+
+    private fun iconBackground(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(8).toFloat()
+        setColor(0xdd404040.toInt())
+    }
+
+    private fun panelBackground(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(10).toFloat()
+        setColor(0xdd202020.toInt())
+    }
 
     private inner class SelectionView(context: Context) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 3f }
@@ -245,6 +281,9 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
         private var previousX = 0f
         private var previousY = 0f
         private var pressedButton = BUTTON_NONE
+        // 悬浮窗局部触点不一定以物理屏幕左上为原点；棋盘几何必须使用投屏帧的绝对坐标。
+        private var screenOffsetX = 0f
+        private var screenOffsetY = 0f
 
         override fun onDraw(canvas: Canvas) {
             canvas.drawColor(0x22000000)
@@ -255,13 +294,18 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
                 else "拖拽左上、右下交叉点中心",
                 30f, 60f, paint,
             )
-            if (!ready) return
+            if (!ready && drag != Drag.CREATE) return
+            val displayLeft = min(left, right)
+            val displayRight = max(left, right)
+            val displayTop = min(top, bottom)
+            val displayBottom = max(top, bottom)
             paint.style = Paint.Style.STROKE
             paint.color = 0xff00e5ff.toInt()
-            canvas.drawRect(left, top, right, bottom, paint)
+            canvas.drawRect(displayLeft, displayTop, displayRight, displayBottom, paint)
             for (x in 0 until 9)
                 for (y in 0 until 10)
-                    canvas.drawCircle(left + x * (right - left) / 8f, top + y * (bottom - top) / 9f, 5f, paint)
+                    canvas.drawCircle(displayLeft + x * (displayRight - displayLeft) / 8f, displayTop + y * (displayBottom - displayTop) / 9f, 5f, paint)
+            if (!ready) return
             paint.style = Paint.Style.FILL
             canvas.drawCircle(left, top, 12f, paint)
             canvas.drawCircle(right, top, 12f, paint)
@@ -287,6 +331,8 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
         private fun beginDrag(event: MotionEvent) {
             previousX = event.x
             previousY = event.y
+            screenOffsetX = event.rawX - event.x
+            screenOffsetY = event.rawY - event.y
             if (ready && event.y >= height - CONTROL_HEIGHT) {
                 pressedButton = if (event.x < width / 2f) BUTTON_CANCEL else BUTTON_CONFIRM
                 return
@@ -326,9 +372,17 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
                 val button = pressedButton
                 pressedButton = BUTTON_NONE
                 if (event.y >= height - CONTROL_HEIGHT) {
+                    val synchronize = synchronizeAfterSelection
+                    synchronizeAfterSelection = false
                     removeSelection()
-                    if (button == BUTTON_CANCEL) listener.onSelectionCancelled()
-                    else listener.onConfigured(BoardGeometry(left, top, right, bottom))
+                    if (button == BUTTON_CANCEL) {
+                        if (!synchronize)
+                            listener.onSelectionCancelled()
+                    } else if (synchronize) {
+                        listener.onReconfigured(screenGeometry(), syncSide)
+                    } else {
+                        listener.onConfigured(screenGeometry())
+                    }
                 }
                 return
             }
@@ -345,6 +399,15 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
             }
             drag = Drag.NONE
             invalidate()
+        }
+
+        private fun screenGeometry(): BoardGeometry {
+            return BoardGeometry(
+                left + screenOffsetX,
+                top + screenOffsetY,
+                right + screenOffsetX,
+                bottom + screenOffsetY,
+            )
         }
 
         private fun hit(x: Float, y: Float): Drag {

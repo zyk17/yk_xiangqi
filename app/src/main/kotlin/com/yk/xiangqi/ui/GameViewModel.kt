@@ -1,6 +1,7 @@
 package com.yk.xiangqi.ui
 
 import android.app.Application
+import android.util.Log
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +55,9 @@ data class UiState(
 )
 
 class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listener {
+    private companion object {
+        const val ENGINE_LOG_TAG = "XiangqiEngine"
+    }
     private data class BookRead(
         val candidates: List<MoveInfo>,
         val needsOptimization: Boolean,
@@ -123,6 +127,14 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
         state = snapshot()
         refresh()
         return true
+    }
+
+    /** 丢弃当前线性历史，回到标准初始局面；AI 与查询模式保持用户当前选择。 */
+    fun newGame() {
+        cancelSearch()
+        reduce(GameAction.Reset(Position.start()))
+        state = snapshot("新对局")
+        refresh()
     }
 
     fun previous() = navigate(GameAction.Navigate.PREVIOUS)
@@ -387,6 +399,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
                 }
             }
             state = snapshot(engineReadyText)
+            Log.i(ENGINE_LOG_TAG, engineReadyText)
             refresh()
         }
     }
@@ -395,13 +408,17 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
         viewModelScope.launch {
             activeSearchId = -1L
             state = snapshot(message)
+            Log.e(ENGINE_LOG_TAG, message)
         }
     }
 
     override fun onBestMove(searchId: Long, info: com.yk.xiangqi.engine.BestMoveInfo) {
         viewModelScope.launch {
             if (searchId != activeSearchId) return@launch
-            if (info.bestMove !in state.legal) return@launch
+            if (info.bestMove !in state.legal) {
+                Log.w(ENGINE_LOG_TAG, "忽略非法 bestmove：${info.bestMove}")
+                return@launch
+            }
             val active = mode()
             val aiTurn =
                 active == PlayMode.BOTH_AI || (active == PlayMode.RED_AI && state.side == Side.RED) || (active == PlayMode.BLACK_AI && state.side == Side.BLACK)
@@ -409,6 +426,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
                 pendingImmediate || aiTurn || (pendingAlternative && active != PlayMode.QUERY)
             activeSearchId = -1L
             if (shouldPlay) {
+                Log.i(ENGINE_LOG_TAG, "自动走子：${info.bestMove}")
                 pendingImmediate = false
                 pendingAlternative = false
                 if (reduce(GameAction.Play(Move.parse(info.bestMove)))) {
@@ -592,8 +610,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
 
     fun linkConfig(): Settings.Link = settings.link()
 
-    fun setLinkConfig(scanMs: String, settleMs: String, threshold: String, tapMs: String): String? = try {
-        settings.setLink(Settings.Link(scanMs.toLong(), settleMs.toLong(), threshold.toFloat(), tapMs.toLong()))
+    fun setLinkConfig(frameSettleMs: String, tapMs: String): String? = try {
+        settings.setLink(Settings.Link(frameSettleMs.toLong(), tapMs.toLong()))
         null
     } catch (error: Exception) {
         "连线参数无效"
@@ -651,6 +669,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
             activeSearchId = engine.go(gameRuntime.state(), GoParams.infinite(null))
         } else if (aiTurn) {
             activeSearchId = engine.go(gameRuntime.state(), goParams(state.side))
+            Log.i(ENGINE_LOG_TAG, "请求自动走子：${state.side}，搜索=$activeSearchId")
         }
     }
 

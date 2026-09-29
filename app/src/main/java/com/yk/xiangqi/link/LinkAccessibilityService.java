@@ -11,6 +11,13 @@ import android.view.accessibility.AccessibilityEvent;
 public final class LinkAccessibilityService extends AccessibilityService {
     private static volatile LinkAccessibilityService active;
 
+    /**
+     * 连线开始前确认无障碍服务已经实际连接，避免只能识别却无法回写走子。
+     */
+    public static boolean isActive() {
+        return active != null;
+    }
+
     @Override
     public void onServiceConnected() {
         active = this;
