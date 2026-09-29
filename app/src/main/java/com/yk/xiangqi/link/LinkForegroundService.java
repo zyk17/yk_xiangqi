@@ -316,9 +316,9 @@ public final class LinkForegroundService extends Service {
             return;
         writtenPly = moves.size();
         com.yk.xiangqi.core.Move move = moves.get(moves.size() - 1);
-        Settings.Link config = settings.link();
+        // 临时测速：移除无障碍点击本身的等待，测量引擎与外部棋盘的极限延迟。
         GesturePlan plan = GesturePlan.forMove(geometry, linkState.bottomSide(), move,
-                config.tapDurationMs, config.tapIntervalMs);
+                1, 1);
         linkState = linkState.awaitWriteback(SystemClock.elapsedRealtime());
         boolean dispatched = LinkAccessibilityService.dispatch(plan, new LinkAccessibilityService.GestureResult() {
             @Override
