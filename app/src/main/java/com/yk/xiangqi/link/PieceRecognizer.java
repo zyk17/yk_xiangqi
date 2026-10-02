@@ -32,12 +32,8 @@ public final class PieceRecognizer implements AutoCloseable {
         .order(ByteOrder.nativeOrder()).asFloatBuffer();
     /** Java 预处理先写入普通连续数组，完成后一次性复制到 ONNX 的 direct buffer。 */
     private final float[] preparedInput = new float[INPUT_FLOATS];
-    /** 静止画面手动同步时重跑的最后模型输入。 */
-    private final FloatBuffer lastInput = ByteBuffer.allocateDirect(INPUT_FLOATS * Float.BYTES)
-        .order(ByteOrder.nativeOrder()).asFloatBuffer();
     /** 框选和投屏缓冲尺寸不变时复用，避免每帧重新计算双线性采样坐标。 */
     private SamplingPlan samplingPlan;
-    private boolean hasLastInput;
 
     public PieceRecognizer(Context context, int modelThreads) throws Exception {
         if (modelThreads < 1 || modelThreads > 8)
@@ -55,23 +51,10 @@ public final class PieceRecognizer implements AutoCloseable {
         session = environment.createSession(model, options);
     }
 
-    public void reset() {
-        hasLastInput = false;
-    }
-
     public ObservedBoard recognize(Image image, BoardGeometry geometry) throws Exception {
-        FloatBuffer input = prepare(image, geometry);
-        lastInput.clear();
-        lastInput.put(input);
-        lastInput.flip();
-        hasLastInput = true;
-        return recognizeInput(input);
-    }
-
-    public ObservedBoard recognizeLastInput() throws Exception {
-        if (!hasLastInput)
-            return null;
-        return recognizeInput(lastInput);
+        Image.Plane plane = image.getPlanes()[0];
+        return recognizeInput(prepare(plane.getBuffer(), image.getWidth(), image.getHeight(),
+            plane.getRowStride(), plane.getPixelStride(), geometry));
     }
 
     private ObservedBoard recognizeInput(FloatBuffer input) throws Exception {
@@ -87,15 +70,11 @@ public final class PieceRecognizer implements AutoCloseable {
     }
 
     /** 直接从投屏 RGBA 图像填充 90 格模型输入，不创建 Bitmap 或单格对象。 */
-    private FloatBuffer prepare(Image image, BoardGeometry geometry) {
-        Image.Plane plane = image.getPlanes()[0];
-        int width = image.getWidth();
-        int height = image.getHeight();
-        int rowStride = plane.getRowStride();
-        int pixelStride = plane.getPixelStride();
+    private FloatBuffer prepare(ByteBuffer pixels, int width, int height, int rowStride, int pixelStride,
+                                BoardGeometry geometry) {
         if (samplingPlan == null || !samplingPlan.matches(geometry, width, height, rowStride, pixelStride))
             samplingPlan = new SamplingPlan(geometry, width, height, rowStride, pixelStride);
-        samplingPlan.fill(plane.getBuffer(), preparedInput);
+        samplingPlan.fill(pixels, preparedInput);
         modelInput.clear();
         modelInput.put(preparedInput);
         modelInput.rewind();

@@ -43,9 +43,9 @@ public final class UciEngine implements Closeable {
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Listener listener;
-    private Process process;
-    private BufferedWriter stdin;
-    private BufferedReader stdout;
+    private volatile Process process;
+    private volatile BufferedWriter stdin;
+    private volatile BufferedReader stdout;
     private final AtomicLong searchId = new AtomicLong();
     private List<UciOption> declaredOptions = List.of();
 
@@ -65,13 +65,14 @@ public final class UciEngine implements Closeable {
                 stdin = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));
                 stdout = new BufferedReader(new InputStreamReader(process.getInputStream()));
                 send("uci");
-                List<UciOption> declaredOptions = awaitUciOk();
-                if (declaredOptions == null)
+                List<UciOption> options = awaitUciOk();
+                if (options == null)
                     throw new IOException("UCI handshake timeout");
-                this.declaredOptions = declaredOptions;
-                listener.onUciOptions(declaredOptions);
+                this.declaredOptions = options;
+                listener.onUciOptions(options);
             } catch (Exception e) {
-                listener.onEngineFailed("引擎启动失败: " + e.getMessage());
+                if (!io.isShutdown())
+                    listener.onEngineFailed("引擎启动失败: " + e.getMessage());
                 stopInternal();
             }
         });
@@ -126,9 +127,12 @@ public final class UciEngine implements Closeable {
     }
 
     private boolean awaitReadyOk() throws IOException {
+        BufferedReader output = stdout;
+        if (output == null)
+            throw new IOException("引擎尚未启动");
         long end = System.currentTimeMillis() + 3000;
         String line;
-        while (System.currentTimeMillis() < end && (line = stdout.readLine()) != null)
+        while (System.currentTimeMillis() < end && (line = output.readLine()) != null)
             if (line.trim().equalsIgnoreCase("readyok"))
                 return true;
         return false;
@@ -138,10 +142,13 @@ public final class UciEngine implements Closeable {
      * 等待 uciok，并收集引擎实际声明的选项。
      */
     private List<UciOption> awaitUciOk() throws IOException {
+        BufferedReader output = stdout;
+        if (output == null)
+            throw new IOException("引擎尚未启动");
         long end = System.currentTimeMillis() + 3000;
         List<UciOption> options = new ArrayList<>();
         String line;
-        while (System.currentTimeMillis() < end && (line = stdout.readLine()) != null) {
+        while (System.currentTimeMillis() < end && (line = output.readLine()) != null) {
             UciOption option = UciOption.parse(line);
             if (option != null)
                 options.add(option);
@@ -208,11 +215,14 @@ public final class UciEngine implements Closeable {
     }
 
     private void readSearch(long expected) throws IOException {
+        BufferedReader output = stdout;
+        if (output == null)
+            return;
         while (true) {
             ThinkingInfo info = null;
             BestMoveInfo bestMove = null;
-            while (stdout.ready()) {
-                String line = stdout.readLine();
+            while (output.ready()) {
+                String line = output.readLine();
                 if (line.startsWith("info")) {
                     ThinkingInfo parsed = ThinkingInfo.parse(line);
                     if (parsed != null && !parsed.pv.isEmpty())
@@ -267,25 +277,47 @@ public final class UciEngine implements Closeable {
     }
 
     private synchronized void send(String s) throws IOException {
-        stdin.write(s);
-        stdin.newLine();
-        stdin.flush();
+        BufferedWriter input = stdin;
+        if (input == null)
+            throw new IOException("引擎尚未启动");
+        input.write(s);
+        input.newLine();
+        input.flush();
     }
 
-    private void stopInternal() {
-        try {
-            if (process != null)
-                process.destroy();
-        } catch (Exception ignored) {
-        }
+    /**
+     * 释放进程及全部管道。它可以由 UI 生命周期线程调用，以打断 io 线程中的阻塞读取。
+     */
+    private synchronized void stopInternal() {
+        Process oldProcess = process;
+        BufferedWriter oldInput = stdin;
+        BufferedReader oldOutput = stdout;
         process = null;
         stdin = null;
         stdout = null;
+        declaredOptions = List.of();
+        closeQuietly(oldInput);
+        try {
+            if (oldProcess != null)
+                oldProcess.destroy();
+        } catch (Exception ignored) {
+        }
+        closeQuietly(oldOutput);
+    }
+
+    private static void closeQuietly(Closeable value) {
+        try {
+            if (value != null)
+                value.close();
+        } catch (IOException ignored) {
+        }
     }
 
     @Override
     public void close() {
-        io.execute(this::stopInternal);
+        // 令正在读取旧搜索的任务失效；关闭 reader/process 会使它立即退出。
+        searchId.incrementAndGet();
         io.shutdownNow();
+        stopInternal();
     }
 }

@@ -165,6 +165,14 @@ public final class LinkCoreTest {
         assertEquals(Side.BLACK, LinkState.standardStartBottom(start.orientForBottom(Side.BLACK)));
     }
 
+    @Test
+    public void desyncedStateAutomaticallyRecoversOnlyAtStandardStart() {
+        LinkState desynced = state().stopRecognition();
+        LinkResult result = desynced.reduce(Position.start(), screenForRed(ObservedBoard.from(Position.start())), 0L);
+        assertEquals(LinkAction.Kind.RESET, result.action().kind());
+        assertEquals(LinkState.Phase.NORMAL, result.state().phase());
+    }
+
     private static ObservedBoard wrongKinds(ObservedBoard board) {
         float[] logits = new float[Board.SQUARES * ObservedBoard.LABELS];
         for (int square = 0; square < Board.SQUARES; square++) {
