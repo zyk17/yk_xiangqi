@@ -16,7 +16,7 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Collections;
 
-/** 内置 FP32 MobileNetV3 的 ONNX Runtime CPU 推理器。 */
+/** 内置 FP32 MobileNetV3 的 ONNX Runtime 推理器，优先使用 NNAPI。 */
 public final class PieceRecognizer implements AutoCloseable {
     private static final int INPUT_SIZE = 48;
     private static final int CHANNELS = 3;
@@ -48,6 +48,7 @@ public final class PieceRecognizer implements AutoCloseable {
         }
         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
         options.setIntraOpNumThreads(modelThreads);
+        options.addNnapi();
         session = environment.createSession(model, options);
     }
 
