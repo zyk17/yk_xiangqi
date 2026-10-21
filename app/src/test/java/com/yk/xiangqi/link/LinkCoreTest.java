@@ -10,8 +10,6 @@ import com.yk.xiangqi.core.Side;
 import org.junit.Test;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
 
 public final class LinkCoreTest {
     @Test
@@ -95,7 +93,7 @@ public final class LinkCoreTest {
     }
 
     @Test
-    public void samplingPlanKeepsBilinearNchwInput() {
+    public void samplingPlanKeepsBilinearNhwcBytes() {
         int width = 81, height = 93, pixelStride = 4, rowStride = width * pixelStride + 12;
         ByteBuffer pixels = ByteBuffer.allocateDirect(rowStride * height);
         for (int index = 0; index < pixels.capacity(); index++)
@@ -213,48 +211,42 @@ public final class LinkCoreTest {
         return side == Side.RED ? kind : kind + 7;
     }
 
-    private static FloatBuffer floats() {
-        return ByteBuffer.allocateDirect(Board.SQUARES * 3 * 48 * 48 * Float.BYTES)
-            .order(ByteOrder.nativeOrder()).asFloatBuffer();
-    }
-
-    /** 优化前的双线性采样，作为模型输入兼容性基准。 */
-    private static FloatBuffer legacyInput(ByteBuffer pixels, BoardGeometry geometry, int width, int height,
-                                           int rowStride, int pixelStride) {
-        float[] mean = {.485f, .456f, .406f};
-        float[] invStd = {1f / .229f, 1f / .224f, 1f / .225f};
-        FloatBuffer out = floats();
+    /** 逐格双线性采样后四舍五入为 uint8 NHWC，作为模型输入基准。 */
+    private static byte[] referenceInput(ByteBuffer pixels, BoardGeometry geometry, int width, int height,
+                                         int rowStride, int pixelStride) {
+        byte[] out = new byte[Board.SQUARES * 48 * 48 * 3];
+        int offset = 0;
         for (int row = 0; row < Board.RANKS; row++)
             for (int column = 0; column < Board.FILES; column++) {
                 BoardGeometry.Rect cell = geometry.cell(column, row);
-                for (int channel = 0; channel < 3; channel++)
-                    for (int y = 0; y < 48; y++)
-                        for (int x = 0; x < 48; x++) {
-                            float sourceX = cell.left() + (x + .5f) * (cell.right() - cell.left()) / 48f;
-                            float sourceY = cell.top() + (y + .5f) * (cell.bottom() - cell.top()) / 48f;
-                            int x0 = clamp((int) Math.floor(sourceX), 0, width - 1);
-                            int y0 = clamp((int) Math.floor(sourceY), 0, height - 1);
-                            int x1 = Math.min(x0 + 1, width - 1), y1 = Math.min(y0 + 1, height - 1);
-                            float dx = sourceX - x0, dy = sourceY - y0;
+                for (int y = 0; y < 48; y++)
+                    for (int x = 0; x < 48; x++) {
+                        float sourceX = cell.left() + (x + .5f) * (cell.right() - cell.left()) / 48f;
+                        float sourceY = cell.top() + (y + .5f) * (cell.bottom() - cell.top()) / 48f;
+                        int x0 = clamp((int) Math.floor(sourceX), 0, width - 1);
+                        int y0 = clamp((int) Math.floor(sourceY), 0, height - 1);
+                        int x1 = Math.min(x0 + 1, width - 1), y1 = Math.min(y0 + 1, height - 1);
+                        float dx = sourceX - x0, dy = sourceY - y0;
+                        for (int channel = 0; channel < 3; channel++) {
                             float a = pixel(pixels, y0 * rowStride + x0 * pixelStride + channel);
                             float b = pixel(pixels, y0 * rowStride + x1 * pixelStride + channel);
                             float c = pixel(pixels, y1 * rowStride + x0 * pixelStride + channel);
                             float d = pixel(pixels, y1 * rowStride + x1 * pixelStride + channel);
                             float value = (a + (b - a) * dx) + ((c + (d - c) * dx) - (a + (b - a) * dx)) * dy;
-                            out.put((value / 255f - mean[channel]) * invStd[channel]);
+                            out[offset++] = (byte) Math.max(0, Math.min(255, Math.round(value)));
                         }
+                    }
             }
-        out.rewind();
         return out;
     }
 
     private static void assertSamplingEqualsLegacy(ByteBuffer pixels, BoardGeometry geometry, int width, int height,
                                                    int rowStride, int pixelStride) {
-        float[] actual = new float[Board.SQUARES * 3 * 48 * 48];
+        byte[] actual = new byte[Board.SQUARES * 48 * 48 * 3];
         new PieceRecognizer.SamplingPlan(geometry, width, height, rowStride, pixelStride).fill(pixels, actual);
-        FloatBuffer expected = legacyInput(pixels, geometry, width, height, rowStride, pixelStride);
+        byte[] expected = referenceInput(pixels, geometry, width, height, rowStride, pixelStride);
         for (int index = 0; index < actual.length; index++)
-            assertEquals("输入索引=" + index, expected.get(index), actual[index], 0f);
+            assertEquals("输入索引=" + index, expected[index], actual[index]);
     }
 
     private static int pixel(ByteBuffer pixels, int offset) {

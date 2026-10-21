@@ -3,6 +3,7 @@ package com.yk.xiangqi.link;
 import android.content.Context;
 import android.media.Image;
 
+import ai.onnxruntime.OnnxJavaType;
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
@@ -13,25 +14,21 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
 import java.util.Collections;
 
-/** 内置 FP32 MobileNetV3 的 ONNX Runtime 推理器，优先使用 NNAPI。 */
+/** 内置棋子 CNN 的 ONNX Runtime 推理器，使用 CPU。输入是 90 格 uint8 NHWC。 */
 public final class PieceRecognizer implements AutoCloseable {
     private static final int INPUT_SIZE = 48;
     private static final int CHANNELS = 3;
     private static final int PIXELS_PER_CELL = INPUT_SIZE * INPUT_SIZE;
-    private static final long[] SHAPE = {90, CHANNELS, INPUT_SIZE, INPUT_SIZE};
-    private static final int INPUT_FLOATS = Board.SQUARES * CHANNELS * PIXELS_PER_CELL;
-    private static final float[] MEAN = {.485f, .456f, .406f};
-    private static final float[] INV_STD = {1f / .229f, 1f / .224f, 1f / .225f};
+    private static final long[] SHAPE = {90, INPUT_SIZE, INPUT_SIZE, CHANNELS};
+    private static final int INPUT_BYTES = Board.SQUARES * PIXELS_PER_CELL * CHANNELS;
     private final OrtEnvironment environment = OrtEnvironment.getEnvironment();
     private final OrtSession session;
     /** 重用的 ONNX 输入缓冲；识别调用仅发生在帧 worker。 */
-    private final FloatBuffer modelInput = ByteBuffer.allocateDirect(INPUT_FLOATS * Float.BYTES)
-        .order(ByteOrder.nativeOrder()).asFloatBuffer();
-    /** Java 预处理先写入普通连续数组，完成后一次性复制到 ONNX 的 direct buffer。 */
-    private final float[] preparedInput = new float[INPUT_FLOATS];
+    private final ByteBuffer modelInput = ByteBuffer.allocateDirect(INPUT_BYTES).order(ByteOrder.nativeOrder());
+    /** Java 采样先写入普通连续数组，完成后一次性复制到 ONNX 的 direct buffer。 */
+    private final byte[] preparedInput = new byte[INPUT_BYTES];
     /** 框选和投屏缓冲尺寸不变时复用，避免每帧重新计算双线性采样坐标。 */
     private SamplingPlan samplingPlan;
 
@@ -48,19 +45,15 @@ public final class PieceRecognizer implements AutoCloseable {
         }
         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
         options.setIntraOpNumThreads(modelThreads);
-        options.addNnapi();
+//        options.addNnapi();
         session = environment.createSession(model, options);
     }
 
     public ObservedBoard recognize(Image image, BoardGeometry geometry) throws Exception {
         Image.Plane plane = image.getPlanes()[0];
-        return recognizeInput(prepare(plane.getBuffer(), image.getWidth(), image.getHeight(),
-            plane.getRowStride(), plane.getPixelStride(), geometry));
-    }
-
-    private ObservedBoard recognizeInput(FloatBuffer input) throws Exception {
-        input.rewind();
-        try (OnnxTensor tensor = OnnxTensor.createTensor(environment, input, SHAPE);
+        ByteBuffer input = prepare(plane.getBuffer(), image.getWidth(), image.getHeight(),
+            plane.getRowStride(), plane.getPixelStride(), geometry);
+        try (OnnxTensor tensor = OnnxTensor.createTensor(environment, input, SHAPE, OnnxJavaType.UINT8);
              OrtSession.Result output = session.run(Collections.singletonMap("input", tensor))) {
             float[][] logits = (float[][]) output.get("logits").get().getValue();
             float[] flat = new float[90 * ObservedBoard.LABELS];
@@ -71,8 +64,8 @@ public final class PieceRecognizer implements AutoCloseable {
     }
 
     /** 直接从投屏 RGBA 图像填充 90 格模型输入，不创建 Bitmap 或单格对象。 */
-    private FloatBuffer prepare(ByteBuffer pixels, int width, int height, int rowStride, int pixelStride,
-                                BoardGeometry geometry) {
+    private ByteBuffer prepare(ByteBuffer pixels, int width, int height, int rowStride, int pixelStride,
+                               BoardGeometry geometry) {
         if (samplingPlan == null || !samplingPlan.matches(geometry, width, height, rowStride, pixelStride))
             samplingPlan = new SamplingPlan(geometry, width, height, rowStride, pixelStride);
         samplingPlan.fill(pixels, preparedInput);
@@ -149,8 +142,8 @@ public final class PieceRecognizer implements AutoCloseable {
                 && this.rowStride == rowStride && this.pixelStride == pixelStride;
         }
 
-        /** 一次坐标/插值计算同时填充 RGB 三通道，输出仍为每格 NCHW。 */
-        void fill(ByteBuffer pixels, float[] output) {
+        /** 一次坐标/插值计算同时填充 RGB 三通道，输出为每格 NHWC uint8。 */
+        void fill(ByteBuffer pixels, byte[] output) {
             copyRoi(pixels);
             for (int row = 0; row < Board.RANKS; row++)
                 for (int column = 0; column < Board.FILES; column++) {
@@ -161,15 +154,14 @@ public final class PieceRecognizer implements AutoCloseable {
                             int xi = column * INPUT_SIZE + x;
                             int a = y0[yi] + x0[xi], b = y0[yi] + x1[xi];
                             int c = y1[yi] + x0[xi], d = y1[yi] + x1[xi];
-                            int index = y * INPUT_SIZE + x;
+                            int index = (y * INPUT_SIZE + x) * CHANNELS;
                             for (int channel = 0; channel < CHANNELS; channel++) {
                                 float va = pixel(roi, a + channel), vb = pixel(roi, b + channel);
                                 float vc = pixel(roi, c + channel), vd = pixel(roi, d + channel);
                                 float top = va + (vb - va) * dx[xi];
                                 float bottom = vc + (vd - vc) * dx[xi];
                                 float value = top + (bottom - top) * dy[yi];
-                                output[base + channel * PIXELS_PER_CELL + index] =
-                                    (value / 255f - MEAN[channel]) * INV_STD[channel];
+                                output[base + index + channel] = quantize(value);
                             }
                         }
                     }
@@ -193,6 +185,10 @@ public final class PieceRecognizer implements AutoCloseable {
 
         private static int pixel(byte[] pixels, int offset) {
             return pixels[offset] & 255;
+        }
+
+        private static byte quantize(float value) {
+            return (byte) Math.max(0, Math.min(255, Math.round(value)));
         }
 
         private static int min(int[] first, int[] second) {
