@@ -200,39 +200,37 @@ public final class Board {
         throw new IllegalStateException("piece marker missing at " + square);
     }
 
-    public List<Move> pseudoLegalMoves() {
+    public List<Move> legalMoves() {
         BitBoard occupied = occupied();
         List<Move> result = new ArrayList<>(48);
         for (int from : ours) {
-            BitBoard targets = switch (pieceAt(from)) {
-                case ROOK -> Attacks.rook(from, occupied);
-                case CANNON -> Attacks.cannonQuiet(from, occupied).or(Attacks.cannonCapture(from, occupied));
-                case KNIGHT -> Attacks.knight(from, occupied);
-                case BISHOP -> Attacks.bishop(from, occupied);
-                case ADVISOR -> Attacks.ADVISOR[from];
-                case KING -> Attacks.KING[from];
-                case PAWN -> Attacks.PAWN[from];
-            };
-            for (int to : targets.minus(ours))
-                if (to != theirKing)
-                    result.add(new Move(from, to));
+            PieceType piece = pieceAt(from);
+            for (int to : moveTargets(piece, from, occupied).minus(ours)) {
+                if (to == theirKing)
+                    continue;
+                Move move = new Move(from, to);
+                if (kingSafe(move, piece, occupied))
+                    result.add(move);
+            }
         }
         return result;
     }
 
-    public List<Move> legalMoves() {
-        List<Move> result = new ArrayList<>();
-        for (Move m : pseudoLegalMoves())
-            if (isLegal(m))
-                result.add(m);
-        return result;
+    public boolean isLegal(Move move) {
+        if (!ours.contains(move.from) || ours.contains(move.to) || move.to == theirKing)
+            return false;
+        BitBoard occupied = occupied();
+        PieceType piece = pieceAt(move.from);
+        if (!moveTargets(piece, move.from, occupied).contains(move.to))
+            return false;
+        return kingSafe(move, piece, occupied);
     }
 
-    public boolean isLegal(Move move) {
-        if (!isPseudoLegal(move))
-            return false;
-        PieceType moving = pieceAt(move.from);
-        BitBoard after = occupied().without(move.from).with(move.to);
+    /**
+     * 走后本方老将不被将军，且双方将帅不照面。调用方已确认落点几何。
+     */
+    private boolean kingSafe(Move move, PieceType moving, BitBoard occupied) {
+        BitBoard after = occupied.without(move.from).with(move.to);
         int king = moving == PieceType.KING ? move.to : ourKing;
         if (king < 0 || theirKing < 0 || Attacks.rook(king, after).contains(theirKing))
             return false;
@@ -241,21 +239,10 @@ public final class Board {
         return checkersTo(king, after, theirs).without(move.to).isEmpty();
     }
 
-    /**
-     * 只验证走法的棋子几何与目标归属；不检查走后本方将是否受攻击。
-     *
-     * <p>合法着生成会先产生伪合法着，再逐一调用 {@link #isLegal(Move)}。这里必须直接查询攻击表，
-     * 不能为每一着重新构造整张伪合法着表。</p>
-     */
-    private boolean isPseudoLegal(Move move) {
-        if (!ours.contains(move.from) || ours.contains(move.to) || move.to == theirKing)
-            return false;
-        BitBoard occupancy = occupied();
-        PieceType piece = pieceAt(move.from);
-        BitBoard targets = piece == PieceType.CANNON
-            ? Attacks.cannonQuiet(move.from, occupancy).or(Attacks.cannonCapture(move.from, occupancy))
-            : attacks(piece, move.from, occupancy);
-        return targets.contains(move.to);
+    private BitBoard moveTargets(PieceType piece, int from, BitBoard occupied) {
+        if (piece == PieceType.CANNON)
+            return Attacks.cannonQuiet(from, occupied).or(Attacks.cannonCapture(from, occupied));
+        return attacks(piece, from, occupied);
     }
 
     public boolean underCheck() {
@@ -301,14 +288,13 @@ public final class Board {
                 candidates = targets.and(rooks.or(knights).or(cannons));
 
             for (int to : candidates) {
-                Move move = new Move(from, to);
-                if (isLegal(move))
+                if (kingSafe(new Move(from, to), attackerType, occupancy))
                     result |= chaseMask(to);
             }
             targets = targets.minus(candidates);
             for (int to : targets) {
                 Move move = new Move(from, to);
-                if (!isLegal(move))
+                if (!kingSafe(move, attackerType, occupancy))
                     continue;
                 Board after = new Board(this);
                 after.apply(move);
