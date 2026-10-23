@@ -123,11 +123,12 @@ public final class LinkCoreTest {
     }
 
     @Test
-    public void nonStandardLargeStructuralChangeDesyncsInsteadOfResetting() {
+    public void nonStandardLargeStructuralChangeKeepsCurrentPosition() {
         Position current = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5")).play(Move.parse("c3c4"));
         Position unrelated = Position.start().play(Move.parse("e3e4"));
-        LinkAction action = state().reduce(current, screenForRed(ObservedBoard.from(unrelated)), 0L).action();
-        assertEquals(LinkAction.Kind.DESYNCED, action.kind());
+        LinkResult result = state().reduce(current, screenForRed(ObservedBoard.from(unrelated)), 0L);
+        assertEquals(LinkAction.Kind.NONE, result.action().kind());
+        assertEquals(LinkState.Phase.NORMAL, result.state().phase());
     }
 
     @Test
