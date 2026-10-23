@@ -102,11 +102,10 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
         move = findMove(current, currentBoard, observed, difference, REPAIR_DIFFERENCE);
         if (move != null)
             return normal(LinkAction.play(move));
-        // 单格误差不足以确定走子时保留当前局面，等待下一张稳定帧。
-        if (difference <= REPAIR_DIFFERENCE)
-            return normal(LinkAction.NONE);
-        // 其余情况无法安全解释为一步合法走子，停止自动处理，等待用户手动同步。
-        return new LinkResult(stopRecognition(), LinkAction.DESYNCED);
+
+        // 单格对不上，或其余无法解释为一步合法走子时(比如静态的动画被当作了稳定帧)，
+        // 保留当前局面，等待下一张稳定帧。
+        return normal(LinkAction.NONE);
     }
 
     static Side standardStartBottom(ObservedBoard screenBoard) {
