@@ -63,7 +63,7 @@ public final class LinkCoreTest {
     @Test
     public void standardStartRepairsDuplicateKingLabels() {
         ObservedBoard malformed = wrongKinds(ObservedBoard.from(Position.start()));
-        LinkResult result = LinkState.start(Side.RED, Side.RED).synchronize(screenForRed(malformed), Side.RED);
+        LinkResult result = LinkState.start(Side.RED, Side.RED).synchronize(screenForRed(malformed));
         assertEquals(LinkAction.Kind.RESET, result.action().kind());
         assertEquals(Position.start().toFen(), result.action().position().toFen());
     }
@@ -72,7 +72,7 @@ public final class LinkCoreTest {
     public void invalidNonStandardSyncFailsWithoutThrowing() {
         Position position = Position.start().play(Move.parse("a3a4"));
         LinkResult result = LinkState.start(Side.RED, Side.RED)
-            .synchronize(screenForRed(wrongKinds(ObservedBoard.from(position))), Side.BLACK);
+            .synchronize(screenForRed(wrongKinds(ObservedBoard.from(position))));
         assertEquals(LinkAction.Kind.DESYNCED, result.action().kind());
         assertEquals(LinkState.Phase.DESYNCED, result.state().phase());
     }
@@ -165,6 +165,56 @@ public final class LinkCoreTest {
     }
 
     @Test
+    public void newGameStandardPositionGivesRedTheMove() {
+        ObservedBoard blackBottom = ObservedBoard.from(Position.start()).orientForBottom(Side.BLACK);
+        LinkResult opened = LinkState.start(Side.RED, Side.BLACK).reduce(Position.start(), blackBottom, 0L);
+        assertEquals(LinkAction.Kind.RESET, opened.action().kind());
+        assertEquals(Side.RED, opened.action().position().sideToMove());
+        assertEquals(Side.BLACK, opened.state().bottomSide());
+        assertEquals(Position.start().toFen(), opened.action().position().toFen());
+
+        Position midgame = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5")).play(Move.parse("c3c4"));
+        LinkResult restarted = state().withNewGameSide(Side.BLACK)
+            .reduce(midgame, screenForRed(ObservedBoard.from(Position.start())), 0L);
+        assertEquals(LinkAction.Kind.RESET, restarted.action().kind());
+        assertEquals(Side.RED, restarted.action().position().sideToMove());
+    }
+
+    @Test
+    public void newGameNonStandardPositionGivesBottomSideTheMove() {
+        Position midgame = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5"));
+        LinkResult redBottom = LinkState.start(Side.BLACK, Side.BLACK)
+            .reduce(Position.start(), ObservedBoard.from(midgame).orientForBottom(Side.RED), 0L);
+        assertEquals(Side.RED, redBottom.action().position().sideToMove());
+        assertEquals(Side.RED, redBottom.state().bottomSide());
+
+        LinkResult blackBottom = LinkState.start(Side.RED, Side.RED)
+            .reduce(Position.start(), ObservedBoard.from(midgame).orientForBottom(Side.BLACK), 0L);
+        assertEquals(Side.BLACK, blackBottom.action().position().sideToMove());
+        assertEquals(Side.BLACK, blackBottom.state().bottomSide());
+    }
+
+    @Test
+    public void manualSyncUsesSameOpeningSide() {
+        Position midgame = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5"));
+        LinkResult redBottom = LinkState.start(Side.RED, Side.BLACK)
+            .synchronize(ObservedBoard.from(midgame).orientForBottom(Side.RED));
+        assertEquals(LinkAction.Kind.RESET, redBottom.action().kind());
+        assertEquals(Side.RED, redBottom.action().position().sideToMove());
+        assertEquals(Side.RED, redBottom.state().bottomSide());
+
+        LinkResult blackBottom = LinkState.start(Side.RED, Side.RED)
+            .synchronize(ObservedBoard.from(midgame).orientForBottom(Side.BLACK));
+        assertEquals(Side.BLACK, blackBottom.action().position().sideToMove());
+        assertEquals(Side.BLACK, blackBottom.state().bottomSide());
+
+        LinkResult standard = LinkState.start(Side.RED, Side.BLACK)
+            .synchronize(ObservedBoard.from(Position.start()).orientForBottom(Side.BLACK));
+        assertEquals(Side.RED, standard.action().position().sideToMove());
+        assertEquals(Side.BLACK, standard.state().bottomSide());
+    }
+
+    @Test
     public void desyncedStateAutomaticallyRecoversOnlyAtStandardStart() {
         LinkState desynced = state().stopRecognition();
         LinkResult result = desynced.reduce(Position.start(), screenForRed(ObservedBoard.from(Position.start())), 0L);
@@ -188,7 +238,7 @@ public final class LinkCoreTest {
 
     private static LinkState state() {
         ObservedBoard start = screenForRed(ObservedBoard.from(Position.start()));
-        return LinkState.start(Side.RED, Side.RED).synchronize(start, Side.RED).state();
+        return LinkState.start(Side.RED, Side.RED).synchronize(start).state();
     }
 
     private static ObservedBoard withLabel(Position position, int changedSquare, byte changedLabel) {

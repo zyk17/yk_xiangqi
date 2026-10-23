@@ -27,6 +27,9 @@ import com.yk.xiangqi.Settings;
 import com.yk.xiangqi.GameRuntime;
 import com.yk.xiangqi.XiangqiApplication;
 import com.yk.xiangqi.core.GameAction;
+import com.yk.xiangqi.core.GameState;
+import com.yk.xiangqi.core.Move;
+import com.yk.xiangqi.core.Position;
 import com.yk.xiangqi.core.Side;
 import com.yk.xiangqi.ui.link.LinkOverlay;
 
@@ -248,7 +251,7 @@ public final class LinkForegroundService extends Service {
         worker.removeCallbacks(settledFrame);
         worker.removeCallbacks(syncFrameTimeout);
         if (!queueLatestFrame(reader) && pendingFrame != null)
-            processSyncFrame(sideToMove);
+            processSyncFrame();
         if (pendingSyncSide != null)
             worker.postDelayed(syncFrameTimeout, SYNC_FRAME_WAIT_MS);
     }
@@ -258,9 +261,10 @@ public final class LinkForegroundService extends Service {
             return;
         pendingSyncSide = null;
         worker.removeCallbacks(syncFrameTimeout);
+        Side previousBottom = linkState.bottomSide();
         linkState = result.state();
         Log.i(TAG, message + result.action().kind());
-        apply(result.action());
+        apply(result.action(), previousBottom);
     }
 
     /**
@@ -300,7 +304,7 @@ public final class LinkForegroundService extends Service {
     /**
      * 所有 WindowManager 操作都回到主线程；棋局与箭头可来自 UI 或帧 worker。
      */
-    private void refreshMiniBoard(com.yk.xiangqi.core.GameState state) {
+    private void refreshMiniBoard(GameState state) {
         if (main != null)
             main.post(() -> {
                 if (overlay != null)
@@ -308,14 +312,14 @@ public final class LinkForegroundService extends Service {
             });
     }
 
-    private void writeLocalMove(com.yk.xiangqi.core.GameState state) {
+    private void writeLocalMove(GameState state) {
         if (geometry == null || linkState == null)
             return;
-        java.util.List<com.yk.xiangqi.core.Move> moves = state.moves();
+        java.util.List<Move> moves = state.moves();
         if (moves.isEmpty() || moves.size() == writtenPly)
             return;
         writtenPly = moves.size();
-        com.yk.xiangqi.core.Move move = moves.get(moves.size() - 1);
+        Move move = moves.get(moves.size() - 1);
         Settings.Link config = settings.link();
         GesturePlan plan = GesturePlan.forMove(geometry, linkState.bottomSide(), move,
                 config.tapDurationMs, config.tapIntervalMs);
@@ -372,10 +376,9 @@ public final class LinkForegroundService extends Service {
             replacePendingFrame(image);
             image = null;
             worker.removeCallbacks(settledFrame);
-            if (pendingSyncSide != null) {
-                Side side = pendingSyncSide;
-                processSyncFrame(side);
-            } else {
+            if (pendingSyncSide != null)
+                processSyncFrame();
+            else {
                 worker.postDelayed(settledFrame, settings.link().frameSettleMs);
             }
             return true;
@@ -405,6 +408,7 @@ public final class LinkForegroundService extends Service {
     }
 
     private void reduceLink(ObservedBoard board, long inferenceStartedMs) {
+        Side previousBottom = linkState.bottomSide();
         LinkResult result = linkState.reduce(gameRuntime.state().position(), board, SystemClock.elapsedRealtime());
         linkState = result.state();
         long now = SystemClock.elapsedRealtime();
@@ -414,7 +418,7 @@ public final class LinkForegroundService extends Service {
                 + "ms，推理与归约=" + (now - inferenceStartedMs) + "ms，动作=" + result.action().kind());
         firstChangeMs = -1L;
         lastChangeMs = -1L;
-        apply(result.action());
+        apply(result.action(), previousBottom);
     }
 
     private void replacePendingFrame(Image image) {
@@ -435,12 +439,12 @@ public final class LinkForegroundService extends Service {
     }
 
     /** 同步帧绕过门控，直接将当前识别结果作为新的应用局面。 */
-    private void processSyncFrame(Side sideToMove) {
+    private void processSyncFrame() {
         Image image = takePendingFrame();
         if (image == null)
             return;
         try {
-            completeSync(linkState.synchronize(recognizer.recognize(image, geometry), sideToMove), "使用当前屏幕帧同步：");
+            completeSync(linkState.synchronize(recognizer.recognize(image, geometry)), "使用当前屏幕帧同步：");
         } catch (Exception error) {
             Log.e(TAG, "当前帧同步失败", error);
         } finally {
@@ -462,7 +466,7 @@ public final class LinkForegroundService extends Service {
     /**
      * 将连线纯归约输出明确写回应用棋局；外部来源不会再次注入无障碍点击。
      */
-    private void apply(LinkAction action) {
+    private void apply(LinkAction action, Side previousBottom) {
         if (stopping || action == null)
             return;
         switch (action.kind()) {
@@ -471,8 +475,14 @@ public final class LinkForegroundService extends Service {
                 gameRuntime.reduce(new GameAction.Play(action.move()), GameRuntime.Origin.EXTERNAL);
             }
             case RESET -> {
+                Side bottom = linkState.bottomSide();
+                boolean followAi = previousBottom != bottom && gameRuntime.aiEnabled(previousBottom);
+                if (followAi)
+                    gameRuntime.setAi(previousBottom, false);
                 gameRuntime.reduce(new GameAction.Reset(action.position()), GameRuntime.Origin.EXTERNAL);
                 writtenPly = 0;
+                if (followAi)
+                    gameRuntime.setAi(bottom, true);
                 Log.i(TAG, "已同步棋盘：行棋=" + action.position().sideToMove()
                         + "，棋子=" + pieceCount(action.position()));
             }
@@ -483,7 +493,7 @@ public final class LinkForegroundService extends Service {
         }
     }
 
-    private static int pieceCount(com.yk.xiangqi.core.Position position) {
+    private static int pieceCount(Position position) {
         final int[] count = {0};
         position.forEachPiece((square, side, type) -> count[0]++);
         return count[0];
