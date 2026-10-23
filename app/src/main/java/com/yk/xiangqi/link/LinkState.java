@@ -42,9 +42,9 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
         return new LinkState(bottomSide, newGameSide, Phase.DESYNCED, 0L);
     }
 
-    /** 用户同步当前识别棋盘时，直接重建应用局面。 */
-    public LinkResult synchronize(ObservedBoard screenBoard, Side sideToMove) {
-        return reset(screenBoard, sideToMove);
+    /** 用户同步当前识别棋盘时，直接重建应用局面。行棋方与自动新游戏相同。 */
+    public LinkResult synchronize(ObservedBoard screenBoard) {
+        return reset(screenBoard);
     }
 
     /**
@@ -61,12 +61,12 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
         // 0) 已失步时不再把任意屏幕变化当作走子；标准初始局面是唯一可无歧义自动恢复的信号。
         if (phase == Phase.DESYNCED) {
             if (standardStartBottom(screenBoard) != null)
-                return reset(screenBoard, newGameSide);
+                return reset(screenBoard);
             return result(LinkAction.NONE);
         }
         // 1) 刚开始连线时没有可比较的旧局面，首张识别结果尝试直接建立应用局面。
         if (phase == Phase.INITIAL)
-            return reset(screenBoard, newGameSide);
+            return reset(screenBoard);
 
         // 2) 统一到使用者视角后，将屏幕棋盘与应用当前局面逐格比较。
         ObservedBoard observed = screenBoard.orientForBottom(bottomSide);
@@ -95,7 +95,7 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
             return normal(LinkAction.play(move));
         // 5) 若当前识别结果恰为标准开局，视为第三方开始了一盘新棋。
         if (standardStartBottom(screenBoard) != null)
-            return reset(screenBoard, newGameSide);
+            return reset(screenBoard);
 
         // 6) 最后只允许一个与起终点无关的格子结构误差，补偿单个漏识别/颜色误识别。
         // 起点和终点始终必须正确，故不会把“少识别一个兵”误判为它走了一步。
@@ -116,7 +116,15 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
         return null;
     }
 
-    private LinkResult reset(ObservedBoard screenBoard, Side sideToMove) {
+    /** 标准开局固定红先，其余局面由屏幕底边一方先走。手动同步与识别到的新游戏相同。 */
+    private static Side openingSide(ObservedBoard screenBoard) {
+        if (standardStartBottom(screenBoard) != null)
+            return Side.RED;
+        return inferBottomSide(screenBoard);
+    }
+
+    private LinkResult reset(ObservedBoard screenBoard) {
+        Side sideToMove = openingSide(screenBoard);
         Side standardBottom = standardStartBottom(screenBoard);
         if (standardBottom != null)
             return reset(standardBottom, STANDARD_START.toPosition(sideToMove));
