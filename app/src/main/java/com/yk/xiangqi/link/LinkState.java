@@ -64,9 +64,13 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
                 return reset(screenBoard);
             return result(LinkAction.NONE);
         }
-        // 1) 刚开始连线时没有可比较的旧局面，首张识别结果尝试直接建立应用局面。
-        if (phase == Phase.INITIAL)
-            return reset(screenBoard);
+        // 1) 刚开始连线时没有可比较的旧局面
+        if (phase == Phase.INITIAL) {
+            if (standardStartBottom(screenBoard) != null || screenBoard.canBuildPosition())
+                return reset(screenBoard);
+            // 否则等待识别再次重试
+            return result(LinkAction.NONE);
+        }
 
         // 2) 统一到使用者视角后，将屏幕棋盘与应用当前局面逐格比较。
         ObservedBoard observed = screenBoard.orientForBottom(bottomSide);
