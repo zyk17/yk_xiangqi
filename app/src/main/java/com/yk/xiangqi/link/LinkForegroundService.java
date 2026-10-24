@@ -262,9 +262,10 @@ public final class LinkForegroundService extends Service {
         pendingSyncSide = null;
         worker.removeCallbacks(syncFrameTimeout);
         Side previousBottom = linkState.bottomSide();
+        LinkState.Phase previousPhase = linkState.phase();
         linkState = result.state();
         Log.i(TAG, message + result.action().kind());
-        apply(result.action(), previousBottom);
+        apply(result.action(), previousBottom, previousPhase);
     }
 
     /**
@@ -409,6 +410,7 @@ public final class LinkForegroundService extends Service {
 
     private void reduceLink(ObservedBoard board, long inferenceStartedMs) {
         Side previousBottom = linkState.bottomSide();
+        LinkState.Phase previousPhase = linkState.phase();
         LinkResult result = linkState.reduce(gameRuntime.state().position(), board, SystemClock.elapsedRealtime());
         linkState = result.state();
         long now = SystemClock.elapsedRealtime();
@@ -418,7 +420,7 @@ public final class LinkForegroundService extends Service {
                 + "ms，推理与归约=" + (now - inferenceStartedMs) + "ms，动作=" + result.action().kind());
         firstChangeMs = -1L;
         lastChangeMs = -1L;
-        apply(result.action(), previousBottom);
+        apply(result.action(), previousBottom, previousPhase);
     }
 
     private void replacePendingFrame(Image image) {
@@ -466,7 +468,7 @@ public final class LinkForegroundService extends Service {
     /**
      * 将连线纯归约输出明确写回应用棋局；外部来源不会再次注入无障碍点击。
      */
-    private void apply(LinkAction action, Side previousBottom) {
+    private void apply(LinkAction action, Side previousBottom, LinkState.Phase previousPhase) {
         if (stopping || action == null)
             return;
         switch (action.kind()) {
@@ -476,7 +478,10 @@ public final class LinkForegroundService extends Service {
             }
             case RESET -> {
                 Side bottom = linkState.bottomSide();
-                boolean followAi = previousBottom != bottom && gameRuntime.aiEnabled(previousBottom);
+                // INITIAL 里的底边只是框选占位（首次固定红方），不能当作真实底边切换去跟随 AI。
+                boolean followAi = previousPhase != LinkState.Phase.INITIAL
+                    && previousBottom != bottom
+                    && gameRuntime.aiEnabled(previousBottom);
                 if (followAi)
                     gameRuntime.setAi(previousBottom, false);
                 gameRuntime.reduce(new GameAction.Reset(action.position()), GameRuntime.Origin.EXTERNAL);
