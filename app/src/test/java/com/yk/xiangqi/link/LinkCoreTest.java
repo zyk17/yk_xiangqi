@@ -1,6 +1,8 @@
 package com.yk.xiangqi.link;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import com.yk.xiangqi.core.Board;
 import com.yk.xiangqi.core.Move;
@@ -63,18 +65,45 @@ public final class LinkCoreTest {
     @Test
     public void standardStartRepairsDuplicateKingLabels() {
         ObservedBoard malformed = wrongKinds(ObservedBoard.from(Position.start()));
-        LinkResult result = LinkState.start(Side.RED, Side.RED).synchronize(screenForRed(malformed));
+        LinkResult result = LinkState.start(Side.RED).synchronize(screenForRed(malformed), Side.RED);
         assertEquals(LinkAction.Kind.RESET, result.action().kind());
         assertEquals(Position.start().toFen(), result.action().position().toFen());
     }
 
     @Test
-    public void invalidNonStandardSyncFailsWithoutThrowing() {
+    public void invalidNonStandardSyncKeepsPhaseWithoutThrowing() {
         Position position = Position.start().play(Move.parse("a3a4"));
-        LinkResult result = LinkState.start(Side.RED, Side.RED)
-            .synchronize(screenForRed(wrongKinds(ObservedBoard.from(position))));
-        assertEquals(LinkAction.Kind.DESYNCED, result.action().kind());
-        assertEquals(LinkState.Phase.DESYNCED, result.state().phase());
+        LinkResult result = LinkState.start(Side.RED)
+            .synchronize(screenForRed(wrongKinds(ObservedBoard.from(position))), Side.BLACK);
+        assertEquals(LinkAction.Kind.NONE, result.action().kind());
+        assertEquals(LinkState.Phase.INITIAL, result.state().phase());
+
+        LinkState linked = state();
+        LinkResult kept = linked.synchronize(screenForRed(wrongKinds(ObservedBoard.from(position))), Side.BLACK);
+        assertEquals(LinkAction.Kind.NONE, kept.action().kind());
+        assertEquals(linked, kept.state());
+    }
+
+    @Test
+    public void canBuildPositionRequiresKingsInOppositePalaces() {
+        Position midgame = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5"));
+        assertTrue(ObservedBoard.from(midgame).canBuildPosition());
+        assertFalse(withMovedKing(midgame, Side.RED, Board.square(0, 0)).canBuildPosition());
+        assertFalse(withMovedKing(midgame, Side.BLACK, Board.square(4, 5)).canBuildPosition());
+    }
+
+    @Test
+    public void initialPhaseRetriesUntilBoardIsBuildable() {
+        Position midgame = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5"));
+        ObservedBoard outsidePalace = screenForRed(withMovedKing(midgame, Side.RED, Board.square(0, 0)));
+        LinkResult retry = LinkState.start(Side.RED).reduce(Position.start(), outsidePalace, 0L);
+        assertEquals(LinkAction.Kind.NONE, retry.action().kind());
+        assertEquals(LinkState.Phase.INITIAL, retry.state().phase());
+
+        LinkResult opened = retry.state().reduce(Position.start(), screenForRed(ObservedBoard.from(midgame)), 0L);
+        assertEquals(LinkAction.Kind.RESET, opened.action().kind());
+        assertEquals(Side.RED, opened.action().position().sideToMove());
+        assertEquals(LinkState.Phase.NORMAL, opened.state().phase());
     }
 
     @Test
@@ -167,14 +196,14 @@ public final class LinkCoreTest {
     @Test
     public void newGameStandardPositionGivesRedTheMove() {
         ObservedBoard blackBottom = ObservedBoard.from(Position.start()).orientForBottom(Side.BLACK);
-        LinkResult opened = LinkState.start(Side.RED, Side.BLACK).reduce(Position.start(), blackBottom, 0L);
+        LinkResult opened = LinkState.start(Side.RED).reduce(Position.start(), blackBottom, 0L);
         assertEquals(LinkAction.Kind.RESET, opened.action().kind());
         assertEquals(Side.RED, opened.action().position().sideToMove());
         assertEquals(Side.BLACK, opened.state().bottomSide());
         assertEquals(Position.start().toFen(), opened.action().position().toFen());
 
         Position midgame = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5")).play(Move.parse("c3c4"));
-        LinkResult restarted = state().withNewGameSide(Side.BLACK)
+        LinkResult restarted = state()
             .reduce(midgame, screenForRed(ObservedBoard.from(Position.start())), 0L);
         assertEquals(LinkAction.Kind.RESET, restarted.action().kind());
         assertEquals(Side.RED, restarted.action().position().sideToMove());
@@ -183,34 +212,34 @@ public final class LinkCoreTest {
     @Test
     public void newGameNonStandardPositionGivesBottomSideTheMove() {
         Position midgame = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5"));
-        LinkResult redBottom = LinkState.start(Side.BLACK, Side.BLACK)
+        LinkResult redBottom = LinkState.start(Side.BLACK)
             .reduce(Position.start(), ObservedBoard.from(midgame).orientForBottom(Side.RED), 0L);
         assertEquals(Side.RED, redBottom.action().position().sideToMove());
         assertEquals(Side.RED, redBottom.state().bottomSide());
 
-        LinkResult blackBottom = LinkState.start(Side.RED, Side.RED)
+        LinkResult blackBottom = LinkState.start(Side.RED)
             .reduce(Position.start(), ObservedBoard.from(midgame).orientForBottom(Side.BLACK), 0L);
         assertEquals(Side.BLACK, blackBottom.action().position().sideToMove());
         assertEquals(Side.BLACK, blackBottom.state().bottomSide());
     }
 
     @Test
-    public void manualSyncUsesSameOpeningSide() {
+    public void manualSyncKeepsRememberedSideToMove() {
         Position midgame = Position.start().play(Move.parse("a3a4")).play(Move.parse("a6a5"));
-        LinkResult redBottom = LinkState.start(Side.RED, Side.BLACK)
-            .synchronize(ObservedBoard.from(midgame).orientForBottom(Side.RED));
+        LinkResult redBottom = LinkState.start(Side.RED)
+            .synchronize(ObservedBoard.from(midgame).orientForBottom(Side.RED), Side.BLACK);
         assertEquals(LinkAction.Kind.RESET, redBottom.action().kind());
-        assertEquals(Side.RED, redBottom.action().position().sideToMove());
+        assertEquals(Side.BLACK, redBottom.action().position().sideToMove());
         assertEquals(Side.RED, redBottom.state().bottomSide());
 
-        LinkResult blackBottom = LinkState.start(Side.RED, Side.RED)
-            .synchronize(ObservedBoard.from(midgame).orientForBottom(Side.BLACK));
-        assertEquals(Side.BLACK, blackBottom.action().position().sideToMove());
+        LinkResult blackBottom = LinkState.start(Side.RED)
+            .synchronize(ObservedBoard.from(midgame).orientForBottom(Side.BLACK), Side.RED);
+        assertEquals(Side.RED, blackBottom.action().position().sideToMove());
         assertEquals(Side.BLACK, blackBottom.state().bottomSide());
 
-        LinkResult standard = LinkState.start(Side.RED, Side.BLACK)
-            .synchronize(ObservedBoard.from(Position.start()).orientForBottom(Side.BLACK));
-        assertEquals(Side.RED, standard.action().position().sideToMove());
+        LinkResult standard = LinkState.start(Side.RED)
+            .synchronize(ObservedBoard.from(Position.start()).orientForBottom(Side.BLACK), Side.BLACK);
+        assertEquals(Side.BLACK, standard.action().position().sideToMove());
         assertEquals(Side.BLACK, standard.state().bottomSide());
     }
 
@@ -238,7 +267,7 @@ public final class LinkCoreTest {
 
     private static LinkState state() {
         ObservedBoard start = screenForRed(ObservedBoard.from(Position.start()));
-        return LinkState.start(Side.RED, Side.RED).synchronize(start).state();
+        return LinkState.start(Side.RED).synchronize(start, Side.RED).state();
     }
 
     private static ObservedBoard withLabel(Position position, int changedSquare, byte changedLabel) {
@@ -246,6 +275,20 @@ public final class LinkCoreTest {
         position.forEachPiece((square, side, type) -> logits[square * ObservedBoard.LABELS + label(side, type)] = 10f);
         for (int label = 0; label < ObservedBoard.LABELS; label++)
             logits[changedSquare * ObservedBoard.LABELS + label] = label == changedLabel ? 10f : 0f;
+        return ObservedBoard.fromLogits(logits);
+    }
+
+    private static ObservedBoard withMovedKing(Position position, Side side, int target) {
+        float[] logits = new float[Board.SQUARES * ObservedBoard.LABELS];
+        int kingLabel = side == Side.RED ? 1 : 8;
+        position.forEachPiece((square, pieceSide, type) -> {
+            if (pieceSide == side && type == PieceType.KING)
+                return;
+            logits[square * ObservedBoard.LABELS + label(pieceSide, type)] = 10f;
+        });
+        for (int label = 0; label < ObservedBoard.LABELS; label++)
+            logits[target * ObservedBoard.LABELS + label] = 0f;
+        logits[target * ObservedBoard.LABELS + kingLabel] = 10f;
         return ObservedBoard.fromLogits(logits);
     }
 

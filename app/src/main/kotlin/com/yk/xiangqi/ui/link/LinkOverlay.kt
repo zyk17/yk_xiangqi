@@ -46,7 +46,6 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
         fun onReconfigured(geometry: BoardGeometry, sideToMove: Side)
         fun onSelectionCancelled()
         fun onAiToggled(): Boolean
-        fun onNewGameSideChanged(sideToMove: Side)
         fun onSynchronize(sideToMove: Side)
         fun onStop()
     }
@@ -61,12 +60,14 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
     private var miniVisible = true
     private var miniSizeDp = 180
     private var syncSide = Side.RED
+    private var sideButton: TextView? = null
     private var synchronizeAfterSelection = false
 
     /** 录屏启动后先展示轻量入口；用户切到第三方棋盘后再主动开始框选。 */
     fun showReady() {
         miniVisible = false
         miniBoard = null
+        sideButton = null
         val row = toolbar()
         row.addView(dragHandle())
         row.addView(iconButton("⌖", "框选棋盘", Color.WHITE) { showSelection(false) })
@@ -101,12 +102,10 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
             val enabled = listener.onAiToggled()
             button.setTextColor(if (enabled) 0xff66bb6a.toInt() else Color.WHITE)
         }
-        val side = iconButton("●", "红先", 0xffd32f2f.toInt()) { button ->
-            syncSide = if (syncSide == Side.RED) Side.BLACK else Side.RED
-            button.setTextColor(if (syncSide == Side.RED) 0xffd32f2f.toInt() else 0xff263238.toInt())
-            button.contentDescription = if (syncSide == Side.RED) "红先" else "黑先"
-            listener.onNewGameSideChanged(syncSide)
+        val side = iconButton("●", "红先", 0xffd32f2f.toInt()) {
+            renderSide(if (syncSide == Side.RED) Side.BLACK else Side.RED)
         }
+        sideButton = side
         val sync = iconButton("↻", "同步当前局面", Color.WHITE) { listener.onSynchronize(syncSide) }
         val board = iconButton("▦", "收起小棋盘", 0xff81d4fa.toInt()) { button -> toggleMiniBoard(button) }
         val size = iconButton("⤢", "切换小棋盘大小，当前 ${miniSizeDp}dp", Color.WHITE) { button -> cycleMiniBoardSize(button) }
@@ -123,7 +122,15 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
         miniBoard = MiniBoardView(context)
         root.addView(miniBoard, LinearLayout.LayoutParams(dp(miniSizeDp), dp(miniSizeDp * 10 / 9)))
         replacePanel(root, min(dp(RUNNING_PANEL_WIDTH_DP), context.resources.displayMetrics.widthPixels))
+        renderSide(miniState?.position()?.sideToMove() ?: syncSide)
         miniState?.let { miniBoard?.update(it, miniArrows) }
+    }
+
+    /** 同步按钮使用的行棋方；默认跟随当前局面，用户可在同步前手动翻转。 */
+    private fun renderSide(side: Side) {
+        syncSide = side
+        sideButton?.setTextColor(if (side == Side.RED) 0xffd32f2f.toInt() else 0xff263238.toInt())
+        sideButton?.contentDescription = if (side == Side.RED) "红先" else "黑先"
     }
 
     private fun replacePanel(next: LinearLayout, width: Int = WindowManager.LayoutParams.WRAP_CONTENT) {
@@ -144,6 +151,9 @@ class LinkOverlay(private val context: Context, private val listener: Listener) 
 
     /** 识别或本地走子后由服务刷新小棋盘与当前主变箭头。 */
     fun showMiniBoard(state: GameState, arrows: List<Move>) {
+        // 箭头刷新也会走到这里；只有局面真的变了才覆盖用户手动翻转的行棋方。
+        if (state.position() !== miniState?.position())
+            renderSide(state.position().sideToMove())
         miniState = state
         miniArrows = arrows
         miniBoard?.update(state, arrows)

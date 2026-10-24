@@ -179,14 +179,6 @@ public final class LinkForegroundService extends Service {
             }
 
             @Override
-            public void onNewGameSideChanged(Side sideToMove) {
-                postToWorker(() -> {
-                    if (linkState != null)
-                        linkState = linkState.withNewGameSide(sideToMove);
-                });
-            }
-
-            @Override
             public void onSynchronize(Side sideToMove) {
                 postToWorker(() -> {
                     Log.i(TAG, "请求使用当前帧同步：行棋=" + sideToMove);
@@ -251,7 +243,7 @@ public final class LinkForegroundService extends Service {
         worker.removeCallbacks(settledFrame);
         worker.removeCallbacks(syncFrameTimeout);
         if (!queueLatestFrame(reader) && pendingFrame != null)
-            processSyncFrame();
+            processSyncFrame(sideToMove);
         if (pendingSyncSide != null)
             worker.postDelayed(syncFrameTimeout, SYNC_FRAME_WAIT_MS);
     }
@@ -285,10 +277,9 @@ public final class LinkForegroundService extends Service {
     }
 
     private void startRecognition(BoardGeometry geometry, Side bottomSide) {
-        Side newGameSide = linkState != null ? linkState.newGameSide() : Side.RED;
         discardPendingFrame();
         this.geometry = geometry;
-        linkState = LinkState.start(bottomSide, newGameSide);
+        linkState = LinkState.start(bottomSide);
         frameGate.reset();
         firstChangeMs = -1L;
         lastChangeMs = -1L;
@@ -378,7 +369,7 @@ public final class LinkForegroundService extends Service {
             image = null;
             worker.removeCallbacks(settledFrame);
             if (pendingSyncSide != null)
-                processSyncFrame();
+                processSyncFrame(pendingSyncSide);
             else {
                 worker.postDelayed(settledFrame, settings.link().frameSettleMs);
             }
@@ -441,12 +432,12 @@ public final class LinkForegroundService extends Service {
     }
 
     /** 同步帧绕过门控，直接将当前识别结果作为新的应用局面。 */
-    private void processSyncFrame() {
+    private void processSyncFrame(Side sideToMove) {
         Image image = takePendingFrame();
         if (image == null)
             return;
         try {
-            completeSync(linkState.synchronize(recognizer.recognize(image, geometry)), "使用当前屏幕帧同步：");
+            completeSync(linkState.synchronize(recognizer.recognize(image, geometry), sideToMove), "使用当前屏幕帧同步：");
         } catch (Exception error) {
             Log.e(TAG, "当前帧同步失败", error);
         } finally {
@@ -491,8 +482,6 @@ public final class LinkForegroundService extends Service {
                 Log.i(TAG, "已同步棋盘：行棋=" + action.position().sideToMove()
                         + "，棋子=" + pieceCount(action.position()));
             }
-            case DESYNCED ->
-                    getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification("连线失步，请同步局面"));
             case NONE -> {
             }
         }

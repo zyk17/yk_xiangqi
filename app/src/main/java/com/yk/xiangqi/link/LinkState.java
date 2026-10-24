@@ -1,6 +1,5 @@
 package com.yk.xiangqi.link;
 
-import com.yk.xiangqi.core.Board;
 import com.yk.xiangqi.core.Move;
 import com.yk.xiangqi.core.Position;
 import com.yk.xiangqi.core.Side;
@@ -11,40 +10,45 @@ import com.yk.xiangqi.core.Side;
  * <p>输入当前应用局面与识别棋盘，输出下一连线状态和应用动作；不接触 Android 图像、
  * ONNX、线程或无障碍服务。</p>
  */
-public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long writebackDeadlineMs) {
+public record LinkState(Side bottomSide, Phase phase, long writebackDeadlineMs) {
     public enum Phase {INITIAL, NORMAL, WAITING_WRITEBACK, DESYNCED}
 
     private static final int REPAIR_DIFFERENCE = 1;
     private static final long WRITEBACK_WAIT_MS = 3_000L;
     private static final ObservedBoard STANDARD_START = ObservedBoard.from(Position.start());
 
-    public static LinkState start(Side bottomSide, Side newGameSide) {
-        return new LinkState(bottomSide, newGameSide, Phase.INITIAL, 0L);
-    }
-
-    public LinkState withNewGameSide(Side side) {
-        return new LinkState(bottomSide, side, phase, writebackDeadlineMs);
+    public static LinkState start(Side bottomSide) {
+        return new LinkState(bottomSide, Phase.INITIAL, 0L);
     }
 
     public LinkState awaitWriteback(long nowMs) {
         if (phase == Phase.DESYNCED)
             return this;
-        return new LinkState(bottomSide, newGameSide, Phase.WAITING_WRITEBACK, nowMs + WRITEBACK_WAIT_MS);
+        return new LinkState(bottomSide, Phase.WAITING_WRITEBACK, nowMs + WRITEBACK_WAIT_MS);
     }
 
     public LinkState cancelWriteback() {
         return phase == Phase.WAITING_WRITEBACK
-            ? new LinkState(bottomSide, newGameSide, Phase.NORMAL, 0L)
+            ? new LinkState(bottomSide, Phase.NORMAL, 0L)
             : this;
     }
 
     public LinkState stopRecognition() {
-        return new LinkState(bottomSide, newGameSide, Phase.DESYNCED, 0L);
+        return new LinkState(bottomSide, Phase.DESYNCED, 0L);
     }
 
-    /** 用户同步当前识别棋盘时，直接重建应用局面。行棋方与自动新游戏相同。 */
-    public LinkResult synchronize(ObservedBoard screenBoard) {
-        return reset(screenBoard);
+    /**
+     * 用户手动同步：屏幕只提供棋子分布，行棋方沿用应用当前记住的一方。
+     * 棋盘建不起来时不改阶段，保留原局面，等下一次同步或稳定帧。
+     */
+    public LinkResult synchronize(ObservedBoard screenBoard, Side sideToMove) {
+        Side standardBottom = standardStartBottom(screenBoard);
+        if (standardBottom != null)
+            return reset(standardBottom, STANDARD_START.toPosition(sideToMove));
+        if (!screenBoard.canBuildPosition())
+            return result(LinkAction.NONE);
+        Side bottom = screenBoard.bottomSide();
+        return reset(bottom, screenBoard.orientForBottom(bottom).toPosition(sideToMove));
     }
 
     /**
@@ -60,17 +64,14 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
     public LinkResult reduce(Position current, ObservedBoard screenBoard, long nowMs) {
         // 0) 已失步时不再把任意屏幕变化当作走子；标准初始局面是唯一可无歧义自动恢复的信号。
         if (phase == Phase.DESYNCED) {
-            if (standardStartBottom(screenBoard) != null)
-                return reset(screenBoard);
+            Side standardBottom = standardStartBottom(screenBoard);
+            if (standardBottom != null)
+                return reset(standardBottom, Position.start());
             return result(LinkAction.NONE);
         }
-        // 1) 刚开始连线时没有可比较的旧局面
-        if (phase == Phase.INITIAL) {
-            if (standardStartBottom(screenBoard) != null || screenBoard.canBuildPosition())
-                return reset(screenBoard);
-            // 否则等待识别再次重试
-            return result(LinkAction.NONE);
-        }
+        // 1) 刚开始连线时没有可比较的旧局面；建不起来时留在 INITIAL 等下一张稳定帧。
+        if (phase == Phase.INITIAL)
+            return open(screenBoard);
 
         // 2) 统一到使用者视角后，将屏幕棋盘与应用当前局面逐格比较。
         ObservedBoard observed = screenBoard.orientForBottom(bottomSide);
@@ -98,8 +99,9 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
         if (move != null)
             return normal(LinkAction.play(move));
         // 5) 若当前识别结果恰为标准开局，视为第三方开始了一盘新棋。
-        if (standardStartBottom(screenBoard) != null)
-            return reset(screenBoard);
+        Side standardBottom = standardStartBottom(screenBoard);
+        if (standardBottom != null)
+            return reset(standardBottom, Position.start());
 
         // 6) 最后只允许一个与起终点无关的格子结构误差，补偿单个漏识别/颜色误识别。
         // 起点和终点始终必须正确，故不会把“少识别一个兵”误判为它走了一步。
@@ -120,35 +122,26 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
         return null;
     }
 
-    /** 标准开局固定红先，其余局面由屏幕底边一方先走。手动同步与识别到的新游戏相同。 */
-    private static Side openingSide(ObservedBoard screenBoard) {
-        if (standardStartBottom(screenBoard) != null)
-            return Side.RED;
-        return inferBottomSide(screenBoard);
-    }
-
-    private LinkResult reset(ObservedBoard screenBoard) {
-        Side sideToMove = openingSide(screenBoard);
+    /**
+     * 首帧建盘时没有记住的行棋方：标准开局红先，其余局面由屏幕底边一方先走。
+     * 棋盘建不起来时不改阶段，等下一张稳定帧重试。
+     */
+    private LinkResult open(ObservedBoard screenBoard) {
         Side standardBottom = standardStartBottom(screenBoard);
         if (standardBottom != null)
-            return reset(standardBottom, STANDARD_START.toPosition(sideToMove));
+            return reset(standardBottom, Position.start());
         if (!screenBoard.canBuildPosition())
-            return failed();
-        Side bottom = inferBottomSide(screenBoard);
-        return reset(bottom, screenBoard.orientForBottom(bottom).toPosition(sideToMove));
+            return result(LinkAction.NONE);
+        Side bottom = screenBoard.bottomSide();
+        return reset(bottom, screenBoard.orientForBottom(bottom).toPosition(bottom));
     }
 
     private LinkResult reset(Side bottom, Position position) {
-        LinkState next = new LinkState(bottom, newGameSide, Phase.NORMAL, 0L);
-        return new LinkResult(next, LinkAction.reset(position));
-    }
-
-    private LinkResult failed() {
-        return new LinkResult(stopRecognition(), LinkAction.DESYNCED);
+        return new LinkResult(new LinkState(bottom, Phase.NORMAL, 0L), LinkAction.reset(position));
     }
 
     private LinkResult normal(LinkAction action) {
-        return new LinkResult(new LinkState(bottomSide, newGameSide, Phase.NORMAL, 0L), action);
+        return new LinkResult(new LinkState(bottomSide, Phase.NORMAL, 0L), action);
     }
 
     private LinkResult result(LinkAction action) {
@@ -177,17 +170,5 @@ public record LinkState(Side bottomSide, Side newGameSide, Phase phase, long wri
 
     private static int mismatch(int first, int second) {
         return first == second ? 0 : 1;
-    }
-
-    private static Side inferBottomSide(ObservedBoard board) {
-        int redKing = -1;
-        int blackKing = -1;
-        for (int square = 0; square < Board.SQUARES; square++) {
-            if (board.at(square) == 1) redKing = square;
-            if (board.at(square) == 8) blackKing = square;
-        }
-        if (redKing < 0 || blackKing < 0)
-            return Side.RED;
-        return Board.rank(redKing) > Board.rank(blackKing) ? Side.RED : Side.BLACK;
     }
 }

@@ -80,17 +80,46 @@ public final class ObservedBoard {
         return difference;
     }
 
-    /** 只有恰好一个红帅和一个黑将的观测棋盘才能安全重建规则局面。 */
+    /**
+     * 只有恰好一个红帅和一个黑将，且双方将帅都在九宫、分处两端时，才能安全重建规则局面。
+     * 屏幕坐标下九宫为第 3–5 列、第 0–2 行或第 7–9 行。
+     */
     public boolean canBuildPosition() {
-        int redKing = 0;
-        int blackKing = 0;
-        for (byte label : cells) {
-            if (label == 1)
-                redKing++;
-            else if (label == 8)
-                blackKing++;
+        int redKing = -1;
+        int blackKing = -1;
+        for (int square = 0; square < Board.SQUARES; square++) {
+            byte label = cells[square];
+            if (label == 1) {
+                if (redKing >= 0)
+                    return false;
+                redKing = square;
+            } else if (label == 8) {
+                if (blackKing >= 0)
+                    return false;
+                blackKing = square;
+            }
         }
-        return redKing == 1 && blackKing == 1;
+        if (redKing < 0 || blackKing < 0)
+            return false;
+        if (!inPalace(redKing) || !inPalace(blackKing))
+            return false;
+        // 将帅必须分属上下九宫，不能挤在同一端。
+        return Board.rank(redKing) / 5 != Board.rank(blackKing) / 5;
+    }
+
+    /** 仅在 {@link #canBuildPosition()} 成立后调用：屏幕下方九宫是红帅则红方在下，否则黑方在下。 */
+    public Side bottomSide() {
+        for (int row = 7; row < Board.RANKS; row++)
+            for (int column = 3; column <= 5; column++)
+                if (cells[Board.square(column, row)] == 1)
+                    return Side.RED;
+        return Side.BLACK;
+    }
+
+    private static boolean inPalace(int square) {
+        int file = Board.file(square);
+        int rank = Board.rank(square);
+        return file >= 3 && file <= 5 && (rank <= 2 || rank >= 7);
     }
 
     /**
