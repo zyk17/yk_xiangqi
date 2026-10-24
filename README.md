@@ -22,7 +22,6 @@ Android 中国象棋分析器：本地棋局、UCI 引擎、`bhobk` 开局库，
 1. `uci` 握手并读取全部引擎 Option。
 2. 写入 `Threads`、`Hash`、`MultiPV` 及其他 Option，使用 `isready` 确认生效。
 3. 使用 `position fen … moves …` 同步局面，支持完整 `go` 参数、`stop` 与 `bestmove`。
-4. 每 200ms 只向 UI 投影最新一条完整 `info`，避免引擎输出造成 UI 压力。
 
 支持内置或导入的 `arm64-v8a` UCI 引擎和可选 NNUE 网络。
 

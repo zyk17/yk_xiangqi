@@ -86,8 +86,8 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
     private var flipped = false
     private var bothArrows = true
     private var queryEnabled = false
-    private var redSearch = SearchConfig(SearchConfig.Kind.MOVETIME, 1_000L)
-    private var blackSearch = SearchConfig(SearchConfig.Kind.MOVETIME, 1_000L)
+    private var redSearch = savedSearch(Side.RED)
+    private var blackSearch = savedSearch(Side.BLACK)
     private var pendingAlternative = false
     private var pendingImmediate = false
     private var activeSearchId = -1L
@@ -322,6 +322,7 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
         if (kind == SearchConfig.Kind.DEPTH && value > Int.MAX_VALUE) return "深度不能超过 ${Int.MAX_VALUE}"
         if (red) redSearch = SearchConfig(kind, value)
         else blackSearch = SearchConfig(kind, value)
+        settings.setSearch(if (red) Side.RED else Side.BLACK, kind.name, value)
         state = snapshot("${if (red) "红" else "黑"}方参数：${goParamsLabel(kind, value)}")
         return null
     }
@@ -595,6 +596,15 @@ class GameViewModel(app: Application) : AndroidViewModel(app), UciEngine.Listene
 
     private fun goParams(side: Side, searchMoves: List<String>? = null): GoParams {
         return searchConfig(side).toGoParams(searchMoves)
+    }
+
+    /** 读取持久化的一方搜索限制；种类或数值无效时回退为 1 秒。 */
+    private fun savedSearch(side: Side): SearchConfig {
+        val kind = SearchConfig.Kind.entries.firstOrNull { it.name == settings.searchKind(side) }
+        val value = settings.searchValue(side)
+        if (kind == null || value <= 0L || (kind == SearchConfig.Kind.DEPTH && value > Int.MAX_VALUE))
+            return SearchConfig(SearchConfig.Kind.MOVETIME, 1_000L)
+        return SearchConfig(kind, value)
     }
 
     private fun searchConfig(side: Side): SearchConfig {

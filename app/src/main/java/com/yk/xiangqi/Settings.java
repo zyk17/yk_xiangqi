@@ -3,6 +3,8 @@ package com.yk.xiangqi;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import com.yk.xiangqi.core.Side;
+
 import java.util.*;
 
 /**
@@ -174,9 +176,9 @@ public final class Settings {
     }
 
     public Link link() {
-        return new Link(preferences.getLong("link.frameSettleMs", 100),
-                preferences.getLong("link.tapDurationMs", 30),
-                preferences.getLong("link.tapIntervalMs", 50),
+        return new Link(preferences.getLong("link.frameSettleMs", 80),
+                preferences.getLong("link.tapDurationMs", 50),
+                preferences.getLong("link.tapIntervalMs", 60),
                 preferences.getInt("link.modelThreads", 4));
     }
 
@@ -187,6 +189,25 @@ public final class Settings {
             .putInt("link.modelThreads", value.modelThreads)
             .remove("link.scanIntervalMs").remove("link.settleMs").remove("link.motionThreshold")
             .apply();
+    }
+
+    /** 一方引擎走子的搜索限制种类，取值为界面层 {@code SearchConfig.Kind} 的名称。 */
+    public String searchKind(Side side) {
+        return preferences.getString(searchKey(side) + "kind", "MOVETIME");
+    }
+
+    public long searchValue(Side side) {
+        return preferences.getLong(searchKey(side) + "value", 1_000L);
+    }
+
+    public void setSearch(Side side, String kind, long value) {
+        preferences.edit().putString(searchKey(side) + "kind", kind)
+            .putLong(searchKey(side) + "value", value)
+            .apply();
+    }
+
+    private static String searchKey(Side side) {
+        return side == Side.RED ? "search.red." : "search.black.";
     }
 
     private Engine readEngine(String id) {
